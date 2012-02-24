@@ -14,5 +14,9 @@ float32 x_max
 float32 y_min
 float32 y_max
 
-# There is no guarantee that the table doe NOT extend further than these 
+# There is no guarantee that the table does NOT extend further than these 
 # values; this is just as far as we've observed it.
+
+
+# Newer table definition as triangle mesh of convex hull (relative to pose)
+arm_navigation_msgs/Shape convex_hull

@@ -41,8 +41,8 @@
 #include <boost/ptr_container/ptr_vector.hpp>
 
 #include <visualization_msgs/Marker.h>
-
 #include <arm_navigation_msgs/Shape.h>
+#include <geometry_msgs/Pose.h>
 
 namespace tabletop_object_detector {
 
@@ -61,6 +61,11 @@ class MarkerGenerator {
   static visualization_msgs::Marker getCloudMarker(const PointCloudType& cloud);
   //! A marker showing where a fit model is believed to be
   static visualization_msgs::Marker getFitMarker(const arm_navigation_msgs::Shape &mesh, double rank);  
+  //! A marker showing where a convex hull table is
+  static visualization_msgs::Marker getConvexHullTableMarker(const arm_navigation_msgs::Shape &mesh);
+  //! Create a generic Marker
+  static visualization_msgs::Marker createMarker(std::string frame_id, double duration, double xdim, double ydim, double zdim,
+					  double r, double g, double b, int type, int id, std::string ns, geometry_msgs::Pose pose);
 };
 
 /*!

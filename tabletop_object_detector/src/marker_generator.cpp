@@ -130,4 +130,53 @@ visualization_msgs::Marker MarkerGenerator::getTableMarker(float xmin, float xma
   return marker;
 }
 
+/*! Create a marker for a convex hull table
+  It is the responsibility of the caller to set the appropriate pose for the marker so that
+  it shows up in the right reference frame.
+ */
+visualization_msgs::Marker MarkerGenerator::getConvexHullTableMarker(const arm_navigation_msgs::Shape &mesh)
+{
+  visualization_msgs::Marker marker;
+  marker.action = visualization_msgs::Marker::ADD;
+  marker.lifetime = ros::Duration();
+  marker.type = visualization_msgs::Marker::LINE_STRIP;
+  marker.color.r = 0.0;
+  marker.color.g = 1.0;
+  marker.color.b = 1.0;
+  marker.color.a = 1.0;
+  marker.scale.x = 0.001;
+  marker.scale.y = 0.001;
+  marker.scale.z = 0.001;
+  for(size_t i=0; i<mesh.triangles.size(); i++)
+  {
+    marker.points.push_back(mesh.vertices[mesh.triangles[i]]);
+  }
+  return marker;
+}
+
+
+/*! Create a generic Marker 
+ */
+visualization_msgs::Marker MarkerGenerator::createMarker(std::string frame_id, double duration, double xdim, double ydim, double zdim,
+							 double r, double g, double b, int type, int id, std::string ns, geometry_msgs::Pose pose)
+{
+  visualization_msgs::Marker marker;
+  marker.action = visualization_msgs::Marker::ADD;
+  marker.lifetime = ros::Duration(duration);
+  marker.type = type;
+  marker.id = id;
+  marker.ns = ns;
+  marker.pose = pose;
+  marker.header.frame_id = frame_id;
+  marker.color.r = r;
+  marker.color.g = g;
+  marker.color.b = b;
+  marker.color.a = 1.0;
+  marker.scale.x = xdim;
+  marker.scale.y = ydim;
+  marker.scale.z = zdim;
+  return marker;
+}
+
+
 } //namespace tabletop_object_detector

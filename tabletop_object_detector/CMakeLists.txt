@@ -40,6 +40,8 @@ rosbuild_add_library(tabletop_model_fitter src/model_fitter.cpp
 rosbuild_add_executable(tabletop_object_recognition src/tabletop_object_recognition.cpp 
                                                     src/marker_generator.cpp)
 target_link_libraries(tabletop_object_recognition tabletop_model_fitter)
+rosbuild_add_boost_directories()
+rosbuild_link_boost(tabletop_object_recognition system)
 
 rosbuild_add_executable(tabletop_complete_node src/tabletop_complete_node.cpp)
 

@@ -1,4 +1,6 @@
 <launch>
+        <arg name="flatten_table" default="false"/>	
+
 	<!-- This launch file starts both segmentation and recognition and the complete node. -->
 	<!-- Does not start the database communication node -->
 
@@ -7,6 +9,7 @@
 	<!-- segmentation -->
 	<include file="$(find tabletop_object_detector)/launch/tabletop_segmentation.launch">
 	  <arg name="tabletop_segmentation_points_in" value="$(arg tabletop_segmentation_points_input)" />
+	  <arg name="flatten_table" value="$(arg flatten_table)"/>
 	</include>
 
 	<!-- object recognition -->

@@ -39,6 +39,7 @@
 #include <tf/transform_listener.h>
 #include <sensor_msgs/PointCloud2.h>
 #include <pcl/filters/passthrough.h>
+#include <pcl/filters/voxel_grid.h>
 #include <pcl/kdtree/kdtree_flann.h>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
@@ -55,7 +56,7 @@ namespace tabletop_object_detector {
 
 class ObjectInHandSegmenter
 {
-  typedef pcl::PointXYZ    Point;
+  typedef pcl::PointXYZRGB    Point;
   typedef pcl::KdTree<Point>::Ptr KdTreePtr;
 
 public:
@@ -140,7 +141,7 @@ private:
   int segmentObject(std::string wrist_frame, sensor_msgs::PointCloud2 &output_cluster)
   {
     ROS_DEBUG("waiting for self-filtered point cloud");
-    pcl::PointCloud<Point> input_cloud;
+    pcl::PointCloud<Point>::Ptr input_cloud(new pcl::PointCloud<Point>());
 	
     // wait for the next PointCloud2 message 
     sensor_msgs::PointCloud2ConstPtr cloud_msg = 
@@ -158,17 +159,23 @@ private:
     if (!wrist_frame.empty())
     {
       // convert to a pcl::PointCloud
-      pcl::fromROSMsg(*cloud_msg, input_cloud);
+      pcl::fromROSMsg(*cloud_msg, *input_cloud);
+
+      // downsample the cloud
+      pcl::VoxelGrid<Point> vox;
+      vox.setInputCloud(input_cloud);
+      vox.setLeafSize(0.005, 0.005, 0.005);
+      vox.filter(*input_cloud);
 
       // Convert cloud to wrist frame
       try
       {
-	pcl_ros::transformPointCloud(wrist_frame, input_cloud, wrist_frame_cloud, listener_);
+	pcl_ros::transformPointCloud(wrist_frame, *input_cloud, wrist_frame_cloud, listener_);
       }
       catch (tf::TransformException ex)
       {
 	ROS_ERROR("Failed to transform cloud from frame %s into frame %s",
-		  input_cloud.header.frame_id.c_str(), wrist_frame.c_str());
+		  input_cloud->header.frame_id.c_str(), wrist_frame.c_str());
 	return 2;
       }
       ROS_DEBUG("Input cloud converted to %s frame", wrist_frame.c_str());
