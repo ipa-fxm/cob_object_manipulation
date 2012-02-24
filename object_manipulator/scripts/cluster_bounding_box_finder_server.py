@@ -41,7 +41,8 @@ from __future__ import division
 import roslib
 roslib.load_manifest('object_manipulator')
 import rospy
-from object_manipulation_msgs.srv import FindClusterBoundingBox, FindClusterBoundingBoxResponse
+from object_manipulation_msgs.srv import FindClusterBoundingBox, FindClusterBoundingBoxResponse, \
+                   FindClusterBoundingBox2, FindClusterBoundingBox2Response
 import object_manipulator.cluster_bounding_box_finder as cluster_bounding_box_finder
 import scipy
 from object_manipulator.convert_functions import *
@@ -52,20 +53,37 @@ class ClusterBoundingBoxFinderServer:
     def __init__(self):
         self.cbbf = cluster_bounding_box_finder.ClusterBoundingBoxFinder()
 
+        #service for PointCloud
         s = rospy.Service('find_cluster_bounding_box', FindClusterBoundingBox, self.find_cluster_bounding_box_callback)
+
+        #service for PointCloud2
+        s = rospy.Service('find_cluster_bounding_box2', FindClusterBoundingBox2, self.find_cluster_bounding_box2_callback)
 
         
     ##service callback for the find_cluster_bounding_box service
     def find_cluster_bounding_box_callback(self, req):
         rospy.loginfo("finding the bounding box for a point cluster")
-        
+        (box_pose, box_dims, error) = self.find_cluster_bounding_box(req)
+        return FindClusterBoundingBoxResponse(box_pose, box_dims, error)
+
+
+    ##service callback for the find_cluster_bounding_box2 service
+    def find_cluster_bounding_box2_callback(self, req):
+        rospy.loginfo("finding the bounding box for a point cluster")
+        (box_pose, box_dims, error) = self.find_cluster_bounding_box(req)
+        return FindClusterBoundingBoxResponse(box_pose, box_dims, error)
+
+
+    ##find the cluster bounding box
+    def find_cluster_bounding_box(self, req):
+
         #use PCA to find the object frame and bounding box dims
         (object_points, object_bounding_box_dims, object_bounding_box, object_to_base_frame, object_to_cluster_frame) = \
                            self.cbbf.find_object_frame_and_bounding_box(req.cluster)
 
         #problem with finding bounding box
         if object_points == None:
-            return FindClusterBoundingBoxResponse(PoseStamped(), Vector3(0,0,0), 1)
+            return (PoseStamped(), Vector3(0,0,0), 1)
 
         #find the frame at the center of the box, not at the bottom
         transform_mat = scipy.matrix([[1,0,0,0],
@@ -82,7 +100,7 @@ class ClusterBoundingBoxFinderServer:
         transformed_pose_stamped = change_pose_stamped_frame(self.cbbf.tf_listener, pose_stamped, req.cluster.header.frame_id)
 
         #rospy.loginfo("returning cluster bounding box response:"+str(pose_stamped)+str(object_bounding_box_dims))
-        return FindClusterBoundingBoxResponse(transformed_pose_stamped, Vector3(*object_bounding_box_dims), 0)
+        return (transformed_pose_stamped, Vector3(*object_bounding_box_dims), 0)
 
 
 if __name__ == '__main__':

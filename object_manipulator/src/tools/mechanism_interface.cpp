@@ -53,6 +53,7 @@ static const std::string SET_PLANNING_SCENE_DIFF_NAME = "environment_server/set_
 static const std::string CHECK_STATE_VALIDITY_NAME = "planning_scene_validity_server/get_state_validity";
 static const std::string GET_ROBOT_STATE_NAME = "environment_server/get_robot_state";
 static const std::string NORMALIZE_SERVICE_NAME = "trajectory_filter_unnormalizer/filter_trajectory";
+static const std::string RESET_COLLISION_MAP_SERVICE_NAME = "collider_node/reset";
 
 static const std::string REACTIVE_GRASP_ACTION_SUFFIX = "/reactive_grasp";
 static const std::string REACTIVE_LIFT_ACTION_SUFFIX = "/reactive_lift";
@@ -97,6 +98,7 @@ MechanismInterface::MechanismInterface() :
   list_controllers_service_(LIST_CONTROLLERS_SERVICE_NAME),
   get_robot_state_client_(GET_ROBOT_STATE_NAME),
   set_planning_scene_diff_service_(SET_PLANNING_SCENE_DIFF_NAME),
+  reset_collision_map_service_(RESET_COLLISION_MAP_SERVICE_NAME),
   //-------------------- multi arm action clients -----------------------
   reactive_grasp_action_client_("", REACTIVE_GRASP_ACTION_SUFFIX, true, true),
   reactive_lift_action_client_("", REACTIVE_LIFT_ACTION_SUFFIX, true, true),
@@ -111,7 +113,7 @@ MechanismInterface::MechanismInterface() :
   cartesian_posture_pub_("", CARTESIAN_POSTURE_SUFFIX, true)
   //cartesian_gains_pub_("", CARTESIAN_GAINS_SUFFIX, true)
 {
-  //collision map publishing topic
+  //attached object publishing topic
   attached_object_pub_ = root_nh_.advertise<arm_navigation_msgs::AttachedCollisionObject>(ATTACHED_COLLISION_TOPIC, 10);
 
   //JointStates topic for current arm angles
@@ -458,7 +460,7 @@ double getJointPosition( std::string name, const arm_navigation_msgs::RobotState
   an empty vector if you don't have a seed you want to use
 
   - joint_state is a list of values to be used for joints that are not part of our plan.
-  For example, use this to specifiy if you want the plan done with the gripper open
+  For example, use this to specify if you want the plan done with the gripper open
   or closed. If you don't specify a joint in here, the current value of that joint will
   be used by the Interpolated IK server.
  */
@@ -514,7 +516,7 @@ int MechanismInterface::getInterpolatedIK(std::string arm_name,
   if (!seed_joint_position.empty())
   { 
     //the caller has provided seeds for planned joints
-    //we are silently assuming that the values passed in match out joint names for IK
+    //we are silently assuming that the values passed in match our joint names for IK
     start_state.joint_state.name = getJointNames(arm_name);
     if (seed_joint_position.size() != start_state.joint_state.name.size())
     {
@@ -658,6 +660,7 @@ bool MechanismInterface::attemptMoveArmToGoal(std::string arm_name, const std::v
   move_arm_goal.motion_plan_request.allowed_planning_time = ros::Duration(5.0);
   move_arm_goal.motion_plan_request.planner_id = MOVE_ARM_PLANNER_ID;
   move_arm_goal.planner_service_name = MOVE_ARM_PLANNER_SERVICE_NAME;
+  
 
   std::vector<std::string> joint_names = getJointNames(arm_name);
   move_arm_goal.motion_plan_request.goal_constraints.joint_constraints.resize(joint_names.size());
@@ -702,11 +705,31 @@ bool MechanismInterface::attemptMoveArmToGoal(std::string arm_name, const std::v
       success = false;
       num_tries++;
       error_code = move_arm_result.error_code;
+/*
+//fxm: this is from /opt/ros...
+      //reset the collision map and wait to repopulate it before trying again
+      if(error_code.val == error_code.START_STATE_IN_COLLISION)
+      {
+        std_srvs::Empty srv;
+        if ( !reset_collision_map_service_.client().call(srv) )
+        {
+          ROS_ERROR("Mechanism interface: reset collision map service call failed");
+        }
+        //tried to reset and repopulate twice already; just reset and try again right away
+        if(num_tries <=2){
+          ros::Duration(5.0).sleep();
+          ROS_INFO("move arm is stuck!  Resetting the collision map and repopulating!");
+        }
+        else{
+          ROS_ERROR("move arm is still stuck!  Resetting the collision map and NOT repopulating");
+        }
+      }
+*/
       modifyMoveArmGoal(move_arm_goal,error_code,move_arm_result.contacts);
       continue;
     }
   }
-  //! If move arm is stuck, then nothing will get it out of here
+  //! If move arm is still stuck, then nothing will get it out of here
   if (!success && error_code.val == error_code.START_STATE_IN_COLLISION)
   {
     throw MoveArmStuckException();
@@ -1138,11 +1161,12 @@ void MechanismInterface::detachAllObjectsFromGripper(std::string arm_name)
 }
 
 void MechanismInterface::handPostureGraspAction(std::string arm_name, 
-						const object_manipulation_msgs::Grasp &grasp, int goal)
+                    const object_manipulation_msgs::Grasp &grasp, int goal, float max_contact_force)
 {
   object_manipulation_msgs::GraspHandPostureExecutionGoal posture_goal;
   posture_goal.grasp = grasp;
   posture_goal.goal = goal;
+  posture_goal.max_contact_force = max_contact_force;
   hand_posture_client_.client(arm_name).sendGoal(posture_goal);
   bool withinWait = hand_posture_client_.client(arm_name).waitForResult(ros::Duration(10.0));
   if(!withinWait) 
@@ -1408,9 +1432,9 @@ std::string MechanismInterface::cartesianControllerName(std::string arm_name)
   return controller_name;
 }
 
-geometry_msgs::PoseStamped MechanismInterface::clipDesiredPose(std::string arm_name, 
-                                                               const geometry_msgs::PoseStamped &desired_pose, 
-                                                               double clip_dist, double clip_angle, 
+geometry_msgs::PoseStamped MechanismInterface::clipDesiredPose(std::string arm_name,
+                                                               const geometry_msgs::PoseStamped &desired_pose,
+                                                               double clip_dist, double clip_angle,
                                                                double &resulting_clip_fraction)
 {
   //no clipping desired
@@ -1418,6 +1442,17 @@ geometry_msgs::PoseStamped MechanismInterface::clipDesiredPose(std::string arm_n
 
   //Get the current gripper pose
   geometry_msgs::PoseStamped current_pose = getGripperPose(arm_name, desired_pose.header.frame_id);
+
+  return clipDesiredPose(current_pose, desired_pose, clip_dist, clip_angle, resulting_clip_fraction);
+}
+
+geometry_msgs::PoseStamped MechanismInterface::clipDesiredPose(const geometry_msgs::PoseStamped &current_pose,
+                                                               const geometry_msgs::PoseStamped &desired_pose,
+                                                               double clip_dist, double clip_angle,
+                                                               double &resulting_clip_fraction)
+{
+  //no clipping desired
+  if(clip_dist == 0 && clip_angle == 0) return desired_pose;
 
   //Get the position and angle dists between current and desired
   Eigen::Affine3d current_trans, desired_trans;
@@ -1427,12 +1462,12 @@ geometry_msgs::PoseStamped MechanismInterface::clipDesiredPose(std::string arm_n
   tf::poseMsgToEigen(desired_pose.pose, desired_trans);
   positionAndAngleDist(current_trans, desired_trans, pos_dist, angle, axis, direction);
 
-  //Clip the desired pose to be at most clip_dist and the desired angle to be at most clip_angle (proportional) 
+  //Clip the desired pose to be at most clip_dist and the desired angle to be at most clip_angle (proportional)
   //from the current
   double pos_mult, angle_mult;
   double pos_change, angle_change;
-  pos_mult = fabs(angle / clip_angle);
-  angle_mult = fabs(pos_dist / clip_dist);
+  angle_mult = fabs(angle / clip_angle);
+  pos_mult = fabs(pos_dist / clip_dist);
   if(pos_mult <=1 && angle_mult <=1){
     return desired_pose;
   }
@@ -1456,9 +1491,50 @@ geometry_msgs::PoseStamped MechanismInterface::clipDesiredPose(std::string arm_n
   return clipped_pose;
 }
 
+
+geometry_msgs::PoseStamped MechanismInterface::overshootDesiredPose(std::string arm_name, 
+								    const geometry_msgs::PoseStamped &desired_pose, 
+								    double overshoot_dist, double overshoot_angle,
+								    double dist_tol, double angle_tol)
+{
+  //Get the current gripper pose
+  geometry_msgs::PoseStamped current_pose = getGripperPose(arm_name, desired_pose.header.frame_id);
+
+  //Get the position and angle dists between current and desired
+  Eigen::Affine3d current_trans, desired_trans;
+  double pos_dist, angle;
+  Eigen::Vector3d axis, direction;
+  tf::poseMsgToEigen(current_pose.pose, current_trans);
+  tf::poseMsgToEigen(desired_pose.pose, desired_trans);
+  positionAndAngleDist(current_trans, desired_trans, pos_dist, angle, axis, direction);
+
+  //Add overshoot_dist in length to the pos difference vector, and overshoot_angle to the angle difference
+  double pos_change = 0;
+  double angle_change = 0;
+  if(angle > angle_tol) angle_change = angle + overshoot_angle;
+  double pos_sign = pos_dist / fabs(pos_dist);
+  if(fabs(pos_dist) > dist_tol) pos_change = pos_dist + pos_sign*overshoot_dist;
+  //std::cout << "pos_change: " << pos_change << "angle_change: " << angle_change;
+
+  Eigen::Affine3d overshoot_trans;
+  overshoot_trans = current_trans;
+  Eigen::Vector3d scaled_direction;
+  scaled_direction = direction * pos_change;
+  Eigen::Translation3d translation(scaled_direction);
+  overshoot_trans = overshoot_trans * translation;
+  Eigen::AngleAxis<double> angle_axis(angle_change, axis);
+  overshoot_trans = overshoot_trans * angle_axis;
+  geometry_msgs::PoseStamped overshoot_pose;
+  tf::poseEigenToMsg(overshoot_trans, overshoot_pose.pose);
+  overshoot_pose.header = desired_pose.header;
+
+  return overshoot_pose;
+} 
+
+
 geometry_msgs::PoseStamped MechanismInterface::clipDesiredPose(std::string arm_name, 
                                                                const geometry_msgs::PoseStamped &desired_pose, 
-                                                               double clip_dist, double clip_angle, 
+                                                               double clip_dist, double clip_angle,
                                                                double &resulting_clip_fraction,
                                                                const std::vector<double> &goal_posture_suggestion,
                                                                std::vector<double> &clipped_posture_goal)
@@ -1519,6 +1595,11 @@ void MechanismInterface::positionAndAngleDist(Eigen::Affine3d start, Eigen::Affi
   angle_axis = trans.rotation();
   angle = angle_axis.angle();
   axis = angle_axis.axis();
+  if(angle > M_PI)
+  {
+    angle = -(angle - 2*M_PI);
+    axis = -axis;
+  }
   direction = trans.translation();
   pos_dist = sqrt(direction.dot(direction));
   if(pos_dist) direction *= 1/pos_dist;
@@ -1526,19 +1607,22 @@ void MechanismInterface::positionAndAngleDist(Eigen::Affine3d start, Eigen::Affi
 
 int MechanismInterface::translateGripperCartesian(std::string arm_name, const geometry_msgs::Vector3Stamped &direction,
 						  ros::Duration timeout, double dist_tol, double angle_tol,
-						double clip_dist, double clip_angle, double timestep)
+						  double clip_dist, double clip_angle, 
+						  double overshoot_dist, double overshoot_angle, double timestep)
 {
   geometry_msgs::PoseStamped current_pose = getGripperPose(arm_name, direction.header.frame_id);
   geometry_msgs::PoseStamped desired_pose = translateGripperPose(direction, current_pose, arm_name);  
   int result = moveArmToPoseCartesian(arm_name, desired_pose, timeout, dist_tol, angle_tol, 
-                                      clip_dist, clip_angle, timestep);
+                                      clip_dist, clip_angle, overshoot_dist, overshoot_angle, timestep);
   return result;
 }
 
 //returns 0 if an error occurred, 1 if it got there, -1 if it timed out
 int MechanismInterface::moveArmToPoseCartesian(std::string arm_name, const geometry_msgs::PoseStamped &desired_pose,
 					       ros::Duration timeout, double dist_tol, double angle_tol,
-					       double clip_dist, double clip_angle, double timestep, 
+					       double clip_dist, double clip_angle, 
+					       double overshoot_dist, double overshoot_angle, 
+					       double timestep, 
 					       const std::vector<double> &goal_posture_suggestion)
 {
   bool success = false;
@@ -1560,6 +1644,10 @@ int MechanismInterface::moveArmToPoseCartesian(std::string arm_name, const geome
   ros::Time begin = ros::Time::now();
   int reached_target = -1;
   geometry_msgs::PoseStamped current_pose = getGripperPose(arm_name, desired_pose.header.frame_id);
+  geometry_msgs::PoseStamped last_pose = current_pose;
+
+  //Compute a new desired_pose with the desired overshoot
+  geometry_msgs::PoseStamped overshoot_pose = overshootDesiredPose(arm_name, desired_pose, overshoot_dist, overshoot_angle, dist_tol, angle_tol);
 
   while(ros::ok())
   {
@@ -1574,18 +1662,30 @@ int MechanismInterface::moveArmToPoseCartesian(std::string arm_name, const geome
     current_pose = getGripperPose(arm_name, desired_pose.header.frame_id);
 
     double pos_dist, angle_dist;
-    poseDists(current_pose.pose, desired_pose.pose, pos_dist, angle_dist);
-    if(pos_dist <= dist_tol && angle_dist <= angle_tol)
+    poseDists(current_pose.pose, overshoot_pose.pose, pos_dist, angle_dist);
+    if(pos_dist <= dist_tol+overshoot_dist && angle_dist <= angle_tol+overshoot_angle)
     {
-      ROS_INFO("moveArmToPoseCartesian reached target");
+      //send the original desired pose out
+      sendCartesianPoseCommand(arm_name, desired_pose);
+
+      //ROS_INFO("moveArmToPoseCartesian reached target");
       reached_target = 1;
+      break;
+    }
+
+    //also stop if we're not moving
+    double pos_change, angle_change;
+    poseDists(current_pose.pose, last_pose.pose, pos_change, angle_change);
+    if(ros::Time::now() - begin > ros::Duration(2.0) && pos_change <= .005*timestep && angle_change <= .001*timestep)
+    {
+      ROS_INFO("moveArmToPoseCartesian is stuck!  Returning");
       break;
     }
      
     //clip the desired pose and posture suggestion and send it out
     double resulting_clip_fraction;
     std::vector<double> clipped_posture_suggestion;
-    geometry_msgs::PoseStamped clipped_pose = clipDesiredPose(arm_name, desired_pose, clip_dist, clip_angle, 
+    geometry_msgs::PoseStamped clipped_pose = clipDesiredPose(arm_name, overshoot_pose, clip_dist, clip_angle, 
                                     resulting_clip_fraction, goal_posture_suggestion, clipped_posture_suggestion);
     sendCartesianPoseCommand(arm_name, clipped_pose);
 
@@ -1593,6 +1693,8 @@ int MechanismInterface::moveArmToPoseCartesian(std::string arm_name, const geome
     {
       sendCartesianPostureCommand(arm_name, clipped_posture_suggestion);
     }
+
+    last_pose = current_pose;
 
     //sleep until the next timestep
     ros::Duration(timestep).sleep();

@@ -64,6 +64,8 @@
 #include <arm_navigation_msgs/SetPlanningSceneDiff.h>
 #include <arm_navigation_msgs/GetRobotState.h>
 
+#include <std_srvs/Empty.h>
+
 #include <interpolated_ik_motion_planner/SetInterpolatedIKMotionPlanParams.h>
 
 #include <arm_navigation_msgs/AttachedCollisionObject.h>
@@ -174,6 +176,9 @@ class MechanismInterface
 
   //! Client for the service that gets the planning scene
   ServiceWrapper<arm_navigation_msgs::SetPlanningSceneDiff> set_planning_scene_diff_service_;
+
+  //! Client for the service that resets the collision map
+  ServiceWrapper<std_srvs::Empty> reset_collision_map_service_;
 
   //------------------------------ Action clients -------------------------------
 
@@ -309,7 +314,7 @@ class MechanismInterface
   //---------- gripper ----------
 
   //! Requests the hand to pre-grasp, grasp or release
-  void handPostureGraspAction(std::string arm_name, const object_manipulation_msgs::Grasp &grasp, int goal);
+  void handPostureGraspAction(std::string arm_name, const object_manipulation_msgs::Grasp &grasp, int goal, float max_contact_force);
 
   //! Queries the hand if a grasp is currently being correctly executed
   bool graspPostureQuery(std::string arm_name, const object_manipulation_msgs::Grasp grasp);
@@ -423,13 +428,16 @@ class MechanismInterface
   // (to within tolerances) or times out (returns 0 for error, 1 for got there, -1 for timed out)
   int moveArmToPoseCartesian(std::string arm_name, const geometry_msgs::PoseStamped &desired_pose,
 			      ros::Duration timeout, double dist_tol = .015, double angle_tol = .09,
-                             double clip_dist = .02, double clip_angle = .16, double timestep = 0.1,
+                             double clip_dist = .02, double clip_angle = .16, 
+				double overshoot_dist = .005, double overshoot_angle = .087,				 
+				double timestep = 0.1,
                              const std::vector<double> &goal_posture_suggestion = std::vector<double>());
 
   //! Translate the gripper by direction using the Cartesian controllers
   int translateGripperCartesian(std::string arm_name, const geometry_msgs::Vector3Stamped &direction,
 				ros::Duration timeout, double dist_tol = .015, double angle_tol = .09,
-				double clip_dist = .02, double clip_angle = .16, double timestep = 0.1);
+				double clip_dist = .02, double clip_angle = .16, 
+				double overshoot_dist = 0.005, double overshoot_angle = 0.087, double timestep = 0.1);
 
   //! Euclidean distance/angle between two Pose messages
   void poseDists(geometry_msgs::Pose start, geometry_msgs::Pose end, double &pos_dist, double &angle);
@@ -437,6 +445,12 @@ class MechanismInterface
   //! Euclidean distance/angle/axis/direction between two Eigen::Affine3ds
   void positionAndAngleDist(Eigen::Affine3d start, Eigen::Affine3d end, double &pos_dist, 
 						double &angle, Eigen::Vector3d &axis, Eigen::Vector3d &direction);
+
+  //! Clip a desired pose to be no more than clip_dist/clip_angle away from the given pose
+  geometry_msgs::PoseStamped clipDesiredPose(const geometry_msgs::PoseStamped &current_pose,
+                                                                 const geometry_msgs::PoseStamped &desired_pose,
+                                                                 double clip_dist, double clip_angle,
+                                                                 double &resulting_clip_fraction);
 
   //! Clip a desired pose to be no more than clip_dist/clip_angle away from the current gripper pose
   geometry_msgs::PoseStamped clipDesiredPose(std::string arm_name, const geometry_msgs::PoseStamped &desired_pose, 
@@ -448,6 +462,12 @@ class MechanismInterface
                                              double clip_dist, double clip_angle, double &resulting_clip_fraction,
                                              const std::vector<double> &goal_posture_suggestion,
                                              std::vector<double> &clipped_posture_goal);
+
+  //! Overshoot a desired pose by overshoot_dist and overshoot_angle
+  geometry_msgs::PoseStamped overshootDesiredPose(std::string arm_name, 
+					     const geometry_msgs::PoseStamped &desired_pose, 
+					     double overshoot_dist, double overshoot_angle, 
+					     double dist_tol, double angle_tol);
 
   //! Returns the joint names for the arm we are using
   std::vector<std::string> getJointNames(std::string arm_name);

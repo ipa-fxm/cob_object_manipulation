@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 2.4.6)
 include($ENV{ROS_ROOT}/core/rosbuild/rosbuild.cmake)
+list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 
 # Set the build type.  Options are:
 #  Coverage       : w/ debug symbols, w/o optimization, w/ code-coverage
@@ -37,6 +38,10 @@ rosbuild_add_library(${PROJECT_NAME}_tools src/tools/mechanism_interface.cpp
                                            src/tools/vector_tools.cpp
                                            src/tools/convert_functions.cpp
                                            include/object_manipulator/tools/msg_helpers.h
+                                           include/object_manipulator/tools/configuration_loader.h
+                                           include/object_manipulator/tools/arm_configurations.h
+                                           include/object_manipulator/tools/hand_description.h
+                                           include/object_manipulator/tools/camera_configurations.h
                                            src/tools/shape_tools.cpp
                                            )
 
@@ -44,11 +49,16 @@ rosbuild_add_library(${PROJECT_NAME}_grasp_execution src/grasp_execution/grasp_e
                                                      src/grasp_execution/simple_grasp_executor.cpp
                                                      src/grasp_execution/grasp_executor_with_approach.cpp
                                                      src/grasp_execution/reactive_grasp_executor.cpp
-                                                     src/grasp_execution/unsafe_grasp_executor.cpp )
+                                                     src/grasp_execution/unsafe_grasp_executor.cpp 
+						     src/grasp_execution/approach_lift_grasp.cpp)
 						   
-rosbuild_add_library(${PROJECT_NAME}_place_execution src/place_execution/place_executor.cpp)
+rosbuild_add_library(${PROJECT_NAME}_place_execution src/place_execution/place_executor.cpp
+                                                     src/place_execution/descend_retreat_place.cpp)
 
 rosbuild_add_library(${PROJECT_NAME} src/object_manipulator.cpp)
+target_link_libraries(${PROJECT_NAME} ${PROJECT_NAME}_tools
+                                      ${PROJECT_NAME}_grasp_execution
+                                      ${PROJECT_NAME}_place_execution)
 
 rosbuild_add_executable(object_manipulator_node nodes/object_manipulator_node.cpp)
 target_link_libraries(object_manipulator_node ${PROJECT_NAME}_tools

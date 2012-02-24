@@ -53,8 +53,8 @@ from convert_functions import *
 ##class to draw stuff to rviz
 class DrawFunctions():
 
-    def __init__(self, topic):
-        self.marker_pub = rospy.Publisher(topic, Marker)
+    def __init__(self, topic, latch = False):
+        self.marker_pub = rospy.Publisher(topic, Marker, latch = latch)
 
     ##clear the current set of points
     def clear_rviz_points(self, ns = 'points', id = 0):
@@ -70,7 +70,7 @@ class DrawFunctions():
 
 
     ##fill in a Marker message
-    def create_marker(self, type, dims, frame, ns, id, duration = 60., color = [1,0,0], opaque = 0.5, pos = [0.,0.,0.], quat = [0.,0.,0.,1.]):
+    def create_marker(self, type, dims, frame, ns, id, duration = 60., color = [1,0,0], opaque = 0.5, pos = [0.,0.,0.], quat = [0.,0.,0.,1.], frame_locked = False):
         marker = Marker()
         marker.header.frame_id = frame
         marker.header.stamp = rospy.Time.now()
@@ -93,12 +93,17 @@ class DrawFunctions():
         marker.pose.orientation.y = quat[1]
         marker.pose.orientation.z = quat[2]
         marker.pose.orientation.w = quat[3]       
+        marker.frame_locked = frame_locked
         return marker
  
 
     ##draw a set of points (3xn or 4xn scipy matrix) in rviz
-    def draw_rviz_points(self, points, frame = 'narrow_stereo_optical_frame', size = .005, ns = 'points', id = 0, duration = 20., color = [0,0,1], opaque = 1.0):
-        marker = self.create_marker(Marker.POINTS, [size, size, size], frame, ns, id, duration, color, opaque)
+    def draw_rviz_points(self, points, frame = 'narrow_stereo_optical_frame', size = .005, ns = 'points', id = 0, duration = 20., color = [0,0,1], opaque = 1.0, pose_mat = None, frame_locked = False):
+        if pose_mat != None:
+            (pos, quat) = mat_to_pos_and_quat(pose_mat)
+            marker = self.create_marker(Marker.POINTS, [size, size, size], frame, ns, id, duration, color, opaque, pos, quat, frame_locked = frame_locked)
+        else:
+            marker = self.create_marker(Marker.POINTS, [size, size, size], frame, ns, id, duration, color, opaque, frame_locked = frame_locked)
 
         for point_ind in range(scipy.shape(points)[1]):
             new_point = Point()
@@ -113,9 +118,9 @@ class DrawFunctions():
 
     ##draw a set of axes in rviz with arrows of varying lengths
     #pose is a 4x4 scipy matrix
-    def draw_rviz_axes(self, pose_mat, frame, lengths = [.05, .01, .01], ns = 'axes', id = 0, duration = 300.):
+    def draw_rviz_axes(self, pose_mat, frame, lengths = [.05, .01, .01], ns = 'axes', id = 0, duration = 300., frame_locked = False):
         
-        marker = self.create_marker(Marker.ARROW, [.01, .02, 0], frame, ns, id, duration)
+        marker = self.create_marker(Marker.ARROW, [.01, .02, 0], frame, ns, id, duration, frame_locked = frame_locked)
         marker.color.a = 1.0
 
         #find the arrow endpoints
@@ -147,10 +152,10 @@ class DrawFunctions():
 
 
     ##draw a sphere in rviz at pose_mat (4x4 scipy matrix) with radius r
-    def draw_rviz_sphere(self, pose_mat, r, frame = 'object_frame', ns = 'spheres', id = 0, duration = 60., color = [1,0,0], opaque = 0.5):
+    def draw_rviz_sphere(self, pose_mat, r, frame = 'object_frame', ns = 'spheres', id = 0, duration = 60., color = [1,0,0], opaque = 0.5, frame_locked = False):
         
         (pos, quat) = mat_to_pos_and_quat(pose_mat)
-        marker = self.create_marker(Marker.SPHERE, [r*2., r*2., r*2.], frame, ns, id, duration, color, opaque, pos, quat)
+        marker = self.create_marker(Marker.SPHERE, [r*2., r*2., r*2.], frame, ns, id, duration, color, opaque, pos, quat, frame_locked = frame_locked)
         self.marker_pub.publish(marker)
 
 
@@ -158,7 +163,7 @@ class DrawFunctions():
     #    2-lists (min, max) of 3-lists (x,y,z) of corner coords
     #    or a 3-list of dimensions (x,y,z)
     #in frame_id frame (defaults to the object frame), id number id, and RGB color
-    def draw_rviz_box(self, pose_mat, ranges, frame = 'object_frame', ns = 'boxes', id = 0, duration = 60., color = [1,0,0], opaque = 0.5):
+    def draw_rviz_box(self, pose_mat, ranges, frame = 'object_frame', ns = 'boxes', id = 0, duration = 60., color = [1,0,0], opaque = 0.5, frame_locked = False):
         if len(ranges) == 2:
             dims = [upper-lower for (upper, lower) in list(zip(ranges[0], ranges[1]))]
             center = [(upper-lower)/2+lower for (upper, lower) in list(zip(ranges[0], ranges[1]))]
@@ -173,17 +178,40 @@ class DrawFunctions():
                                     
         quat = tf.transformations.quaternion_from_matrix(pose_mat)
             
-        marker = self.create_marker(Marker.CUBE, dims, frame, ns, id, duration, color, opaque, transformed_center[0:3, 0], quat)
+        marker = self.create_marker(Marker.CUBE, dims, frame, ns, id, duration, color, opaque, transformed_center[0:3, 0], quat, frame_locked = frame_locked)
         self.marker_pub.publish(marker)
 
 
     ##draw a cylinder in rviz at pose_mat (4x4 scipy matrix, z-axis is cylinder axis) with radius r and length l
-    def draw_rviz_cylinder(self, pose_mat, r, l, frame = 'object_frame', ns = 'cylinders', id = 0, duration = 60., color = [1,0,0], opaque = 0.5):
+    def draw_rviz_cylinder(self, pose_mat, r, l, frame = 'object_frame', ns = 'cylinders', id = 0, duration = 60., color = [1,0,0], opaque = 0.5, frame_locked = False):
         
         (pos, quat) = mat_to_pos_and_quat(pose_mat)
-        marker = self.create_marker(Marker.CYLINDER, [r*2., r*2., l], frame, ns, id, duration, color, opaque, pos, quat)
+        marker = self.create_marker(Marker.CYLINDER, [r*2., r*2., l], frame, ns, id, duration, color, opaque, pos, quat, frame_locked = frame_locked)
         self.marker_pub.publish(marker)
 
+
+    ##draw a line strip in rviz, with origin at pose_mat (4x4 scipy matrix) and points (3xn or 4xn scipy matrix) relative to that origin
+    def draw_rviz_line_strip(self, pose_mat, points, frame, size = .005, ns = 'line strip', id = 0, duration = 20., color = [0,1,1], opaque = 1.0, frame_locked = False):
+        (pos, quat) = mat_to_pos_and_quat(pose_mat)
+        marker = self.create_marker(Marker.LINE_STRIP, [size, 0, 0], frame, ns, id, duration, color, opaque, pos, quat, frame_locked = frame_locked)
+        for point_ind in range(scipy.shape(points)[1]):
+            new_point = Point()
+            new_point.x = points[0, point_ind]
+            new_point.y = points[1, point_ind]
+            new_point.z = points[2, point_ind]
+            marker.points.append(new_point)
+
+        self.marker_pub.publish(marker)
+
+
+    ##draw a circle in rviz (pose_mat z-axis is normal to the circle plane) with radius r, thickness size, and number of facets num_facets
+    def draw_rviz_circle(self, pose_mat, r, frame, num_facets = 20, size = .005, ns = 'circle', id = 0, duration = 20., color = [0,1,1], opaque = 1.0, frame_locked = False):
+        angle_step = math.pi*2./num_facets
+        points = scipy.matrix(scipy.zeros([3, num_facets+1]))
+        for (ind, angle) in enumerate(scipy.arange(0, math.pi*2.+angle_step, angle_step)):
+            points[0,ind] = math.cos(angle)*r
+            points[1,ind] = math.sin(angle)*r
+        self.draw_rviz_line_strip(pose_mat, points, frame, size, ns, id, duration, color, opaque, frame_locked)
 
 
     ##clear all the currently drawn grasps by redrawing them tiny and short-lived
@@ -202,7 +230,7 @@ class DrawFunctions():
 
     ##draw a set of grasps (wrist Poses) as x and y-axis arrows in rviz, 
     #with the x-axis long compared to y
-    def draw_grasps(self, grasps, frame, ns = 'grasps', pause = 0):
+    def draw_grasps(self, grasps, frame, ns = 'grasps', pause = 0, frame_locked = False):
 
         marker = Marker()
         marker.header.frame_id = frame
@@ -212,6 +240,7 @@ class DrawFunctions():
         marker.action = Marker.ADD
         marker.color.a = 1.0
         marker.lifetime = rospy.Duration(0)
+        marker.frame_locked = frame_locked
 
         for (grasp_num, grasp) in enumerate(grasps):
             if grasp_num == 0:

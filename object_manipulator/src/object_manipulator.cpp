@@ -45,10 +45,16 @@
 
 #include <object_manipulation_msgs/tools.h>
 
+//old style executors
 #include "object_manipulator/grasp_execution/grasp_executor_with_approach.h"
 #include "object_manipulator/grasp_execution/reactive_grasp_executor.h"
 #include "object_manipulator/grasp_execution/unsafe_grasp_executor.h"
 #include "object_manipulator/place_execution/place_executor.h"
+
+//new style executors
+#include "object_manipulator/grasp_execution/approach_lift_grasp.h"
+#include "object_manipulator/place_execution/descend_retreat_place.h"
+
 #include "object_manipulator/tools/grasp_marker_publisher.h"
 #include "object_manipulator/tools/exceptions.h"
 
@@ -64,13 +70,15 @@ using object_manipulation_msgs::GraspResult;
 using object_manipulation_msgs::PlaceLocationResult;
 using object_manipulation_msgs::getGraspResultInfo;
 using object_manipulation_msgs::getPlaceLocationResultInfo;
+using object_manipulation_msgs::Grasp;
+using object_manipulation_msgs::GraspPlanningAction;
 
 namespace object_manipulator {
 
 ObjectManipulator::ObjectManipulator() :
   priv_nh_("~"),
   root_nh_(""),
-  grasp_planning_services_("", "", false),
+  grasp_planning_actions_("", "", false, false),
   marker_pub_(NULL)
 {
   bool publish_markers = true;
@@ -79,16 +87,37 @@ ObjectManipulator::ObjectManipulator() :
     marker_pub_ = new GraspMarkerPublisher();
   }
 
+  //old style executors
   grasp_executor_with_approach_ = new GraspExecutorWithApproach(marker_pub_);
   reactive_grasp_executor_ = new ReactiveGraspExecutor(marker_pub_);
   unsafe_grasp_executor_ = new UnsafeGraspExecutor(marker_pub_);
   place_executor_ = new PlaceExecutor(marker_pub_);
   reactive_place_executor_ = new ReactivePlaceExecutor(marker_pub_);
 
+  //new syle executors
+  
+  grasp_tester_with_approach_ = new GraspTesterWithApproach;
+  grasp_tester_with_approach_->setMarkerPublisher(marker_pub_);
+  unsafe_grasp_tester_ = new UnsafeGraspTester;
+  unsafe_grasp_tester_->setMarkerPublisher(marker_pub_);
+  standard_grasp_performer_ = new StandardGraspPerformer;
+  standard_grasp_performer_->setMarkerPublisher(marker_pub_);
+  reactive_grasp_performer_ = new ReactiveGraspPerformer;
+  reactive_grasp_performer_->setMarkerPublisher(marker_pub_);
+  unsafe_grasp_performer_ = new UnsafeGraspPerformer;
+  unsafe_grasp_performer_->setMarkerPublisher(marker_pub_);
+ 
+  standard_place_tester_ = new StandardPlaceTester;
+  standard_place_tester_->setMarkerPublisher(marker_pub_);
+  standard_place_performer_ = new StandardPlacePerformer;
+  standard_place_performer_->setMarkerPublisher(marker_pub_);
+  reactive_place_performer_ = new ReactivePlacePerformer;
+  reactive_place_performer_->setMarkerPublisher(marker_pub_);
+
   priv_nh_.param<std::string>("default_cluster_planner", default_cluster_planner_, "default_cluster_planner");
   priv_nh_.param<std::string>("default_database_planner", default_database_planner_, "default_database_planner");
-  priv_nh_.param<std::string>("default_probabilistic_planner", default_probabilistic_planner_, 
-			      "default_probabilistic_planner");
+//  priv_nh_.param<std::string>("default_probabilistic_planner", default_probabilistic_planner_, 
+//			      "default_probabilistic_planner");
   priv_nh_.param<bool>("randomize_grasps", randomize_grasps_, false);
 
   ROS_INFO("Object manipulator ready. Default cluster planner: %s. Default database planner: %s.", 
@@ -99,11 +128,55 @@ ObjectManipulator::ObjectManipulator() :
 ObjectManipulator::~ObjectManipulator()
 {
   delete marker_pub_;
+
+  //old style executors
   delete grasp_executor_with_approach_;
   delete reactive_grasp_executor_;
   delete unsafe_grasp_executor_;
   delete place_executor_;
   delete reactive_place_executor_;
+
+  //new style executors
+  delete grasp_tester_with_approach_;
+  delete unsafe_grasp_tester_;
+  delete standard_grasp_performer_;
+  delete reactive_grasp_performer_;
+  delete unsafe_grasp_performer_;
+
+  delete standard_place_tester_;
+  delete standard_place_performer_;
+  delete reactive_place_performer_;
+}
+
+void ObjectManipulator::graspFeedback(
+                                 actionlib::SimpleActionServer<object_manipulation_msgs::PickupAction> *action_server,
+                                 size_t tested_grasps, size_t current_grasp)
+{
+  PickupFeedback feedback;
+  feedback.total_grasps = grasp_container_.size();
+  feedback.current_grasp = current_grasp + tested_grasps;
+  action_server->publishFeedback(feedback);
+}
+
+void ObjectManipulator::graspPlanningFeedbackCallback(
+                                             const object_manipulation_msgs::GraspPlanningFeedbackConstPtr &feedback)
+{
+  ROS_DEBUG_STREAM_NAMED("manipulation", "Feedback from planning action, total grasps: " << feedback->grasps.size());
+  grasp_container_.addGrasps(feedback->grasps);
+}
+
+void ObjectManipulator::graspPlanningDoneCallback(const actionlib::SimpleClientGoalState& state,
+                                             const object_manipulation_msgs::GraspPlanningResultConstPtr &result)
+{
+  if (state == actionlib::SimpleClientGoalState::SUCCEEDED)
+  {
+    ROS_DEBUG_STREAM_NAMED("manipulation", "Final result from planning action, total grasps: " << result->grasps.size());
+    grasp_container_.addGrasps(result->grasps);
+  }
+  else
+  {
+    ROS_ERROR("Grasp planning action did not succeed");
+  }
 }
 
 void ObjectManipulator::pickup(const PickupGoal::ConstPtr &pickup_goal,
@@ -131,73 +204,76 @@ void ObjectManipulator::pickup(const PickupGoal::ConstPtr &pickup_goal,
     }
   }
   
-  //populate a list of grasps to be tried
-  std::vector<object_manipulation_msgs::Grasp> grasps;
+  //populate the grasp container
+  grasp_container_.clear();
+  bool using_planner_action;
+  std::string planner_action;
   if (!pickup_goal->desired_grasps.empty())
   {
     //use the requested grasps, if any
-    grasps = pickup_goal->desired_grasps;
+    grasp_container_.addGrasps(pickup_goal->desired_grasps);
+    using_planner_action = false;
   }
   else
   {
     //decide which grasp planner to call depending on the type of object
-    std::string planner_service;
-    //option that directly calls low-level planners
-    if (!pickup_goal->target.potential_models.empty()) planner_service = default_database_planner_;
-    else planner_service = default_cluster_planner_;    
-
-    //probabilistic planner
-    //planner_service = default_probabilistic_planner_;
-
-    //call the planner and save the list of grasps
-    object_manipulation_msgs::GraspPlanning srv;
-    srv.request.arm_name = pickup_goal->arm_name;
-    srv.request.target = pickup_goal->target;
-    srv.request.collision_object_name = pickup_goal->collision_object_name;
-    srv.request.collision_support_surface_name = pickup_goal->collision_support_surface_name;
+    if (!pickup_goal->target.potential_models.empty()) planner_action = default_database_planner_;
+    else planner_action = default_cluster_planner_;        
+    //call the planner action, which will populate the grasp container as feedback arrives
+    object_manipulation_msgs::GraspPlanningGoal goal;
+    goal.arm_name = pickup_goal->arm_name;
+    goal.target = pickup_goal->target;
+    goal.collision_object_name = pickup_goal->collision_object_name;
+    goal.collision_support_surface_name = pickup_goal->collision_support_surface_name;
+    goal.movable_obstacles = pickup_goal->movable_obstacles;
     try
     {
-      if (!grasp_planning_services_.client(planner_service).call(srv))
-      {
-	ROS_ERROR("Object manipulator failed to call planner at %s", planner_service.c_str());
-	result.manipulation_result.value = ManipulationResult::ERROR;
-	action_server->setAborted(result);
-	return;
-      }
-      if (srv.response.error_code.value != srv.response.error_code.SUCCESS)
-      {
-	ROS_ERROR("Object manipulator: grasp planner failed with error code %d", srv.response.error_code.value);
-	result.manipulation_result.value = ManipulationResult::ERROR;
-	action_server->setAborted(result);
-	return;
-      }
-      grasps = srv.response.grasps;
+      grasp_planning_actions_.client(planner_action).sendGoal(goal, 
+                                          boost::bind(&ObjectManipulator::graspPlanningDoneCallback, this, _1, _2),
+                                          actionlib::SimpleActionClient<GraspPlanningAction>::SimpleActiveCallback(), 
+                                          boost::bind(&ObjectManipulator::graspPlanningFeedbackCallback, this, _1));
     }
     catch (ServiceNotFoundException &ex)
     {
-      ROS_ERROR("Planning service not found");
+      ROS_ERROR("Planning action %s not found", planner_action.c_str());
       result.manipulation_result.value = ManipulationResult::ERROR;
       action_server->setAborted(result);
       return;
     }
+    using_planner_action = true;
   }
-  feedback.total_grasps = grasps.size();
-  feedback.current_grasp = 0;
-  action_server->publishFeedback(feedback);
-
-  //decide which grasp executor will be used
-  GraspExecutor *executor;
-  executor = grasp_executor_with_approach_;
-//  TODO: this is a hack to enforce unsafe grasp executor
-//  if (pickup_goal->ignore_collisions) executor = unsafe_grasp_executor_;
-//  else if (pickup_goal->use_reactive_execution) executor = reactive_grasp_executor_;
-//  else executor = grasp_executor_with_approach_;
-
-  if (randomize_grasps_)
+  ScopedGoalCancel<GraspPlanningAction> goal_cancel(NULL);
+  if (using_planner_action)
   {
-    ROS_INFO("Randomizing grasps");
-    std::random_shuffle(grasps.begin(), grasps.end());
+    goal_cancel.setClient(&grasp_planning_actions_.client(planner_action));
   }
+  //decide which grasp tester and performer will be used
+  GraspTester *grasp_tester;
+  GraspPerformer *grasp_performer;
+  if (pickup_goal->ignore_collisions) 
+  {
+    grasp_tester = unsafe_grasp_tester_;
+    grasp_performer = unsafe_grasp_performer_;
+  }
+  else 
+  {
+    grasp_tester = grasp_tester_with_approach_;
+    if (pickup_goal->use_reactive_execution)
+    {
+      grasp_performer = reactive_grasp_performer_;
+    }
+    else
+    {
+      grasp_performer = standard_grasp_performer_;
+    }
+  }
+
+  grasp_tester->setInterruptFunction(
+               boost::bind(&actionlib::SimpleActionServer<object_manipulation_msgs::PickupAction>::isPreemptRequested,
+                           action_server));
+  grasp_performer->setInterruptFunction(
+               boost::bind(&actionlib::SimpleActionServer<object_manipulation_msgs::PickupAction>::isPreemptRequested,
+                           action_server));
 
   //PROF_RESET_ALL;
   //PROF_START_TIMER(TOTAL_PICKUP_TIMER);
@@ -206,47 +282,76 @@ void ObjectManipulator::pickup(const PickupGoal::ConstPtr &pickup_goal,
   result.manipulation_result.value = ManipulationResult::UNFEASIBLE;
   try
   {
-    for (size_t i=0; i<grasps.size(); i++)
+    size_t tested_grasps = 0;
+    while (1)
     {
-      if (action_server->isPreemptRequested())
-      {
-	action_server->setPreempted();
-	return;
+      if (action_server->isPreemptRequested()) throw InterruptRequestedException();
+
+      ROS_DEBUG_STREAM_NAMED("manipulation", "Object manipulator: getting grasps beyond " << tested_grasps);
+      std::vector<object_manipulation_msgs::Grasp> new_grasps = grasp_container_.getGrasps(tested_grasps);
+      if ( new_grasps.empty() )
+      { 
+        if ( using_planner_action && (grasp_planning_actions_.client(planner_action).getState() == 
+                                      actionlib::SimpleClientGoalState::ACTIVE || 
+                                      grasp_planning_actions_.client(planner_action).getState() == 
+                                      actionlib::SimpleClientGoalState::PENDING) )
+        {
+          ROS_DEBUG_NAMED("manipulation", "Object manipulator: waiting for planner action to provide grasps");
+          ros::Duration(0.25).sleep();
+          continue;
+        }
+        else
+        {
+          ROS_INFO("Object manipulator: all grasps have been tested");
+          break;
+        }
       }
-      feedback.current_grasp = i+1;
-      action_server->publishFeedback(feedback);
-      GraspResult grasp_result = executor->checkAndExecuteGrasp(*pickup_goal, grasps[i]);
-      ROS_INFO_STREAM("Grasp " << i+1 << "/" << grasps.size() << " result: " << getGraspResultInfo(grasp_result));
-      ROS_DEBUG_NAMED("manipulation","Grasp result code: %d; continuation: %d", 
-                      grasp_result.result_code, grasp_result.continuation_possible);
-      result.attempted_grasps.push_back(grasps[i]);
-      result.attempted_grasp_results.push_back(grasp_result);
-      if (grasp_result.result_code == GraspResult::SUCCESS)
+      grasp_tester->setFeedbackFunction(boost::bind(&ObjectManipulator::graspFeedback, 
+                                                    this, action_server, tested_grasps,  _1));
+      //test a batch of grasps
+      std::vector<GraspExecutionInfo> execution_info;
+      grasp_tester->testGrasps(*pickup_goal, new_grasps, execution_info, !pickup_goal->only_perform_feasibility_test);
+      if (execution_info.empty()) throw GraspException("grasp tester provided empty ExecutionInfo");
+      //try to perform them
+      if (!pickup_goal->only_perform_feasibility_test)
       {
-	result.manipulation_result.value = ManipulationResult::SUCCESS;
-	if (!pickup_goal->only_perform_feasibility_test)
-	{
-	  result.grasp = grasps[i];
-	  action_server->setSucceeded(result);
-          //PROF_STOP_TIMER(TOTAL_PICKUP_TIMER);
-          //PROF_PRINT_ALL;
-	  return;
-	}
+        grasp_performer->performGrasps(*pickup_goal, new_grasps, execution_info);
       }
-      if (!grasp_result.continuation_possible)
+      if (execution_info.empty()) throw GraspException("grasp performer provided empty ExecutionInfo");
+      //copy information about tested grasps over in result
+      for (size_t i=0; i<execution_info.size(); i++)
       {
-	if (pickup_goal->only_perform_feasibility_test)
-	{
-	  ROS_ERROR("Continuation impossible when performing feasibility test");
-	}
-	result.grasp = grasps[i];
-	if (grasp_result.result_code == GraspResult::LIFT_FAILED)
-	  result.manipulation_result.value = ManipulationResult::LIFT_FAILED;
-	else
-	  result.manipulation_result.value = ManipulationResult::FAILED;
-	action_server->setAborted(result);
-	return;
+        result.attempted_grasps.push_back(new_grasps[i]);
+        result.attempted_grasp_results.push_back(execution_info[i].result_);
       }
+      //see if we're done
+      if (execution_info.back().result_.result_code == GraspResult::SUCCESS)
+      {
+        result.manipulation_result.value = ManipulationResult::SUCCESS;
+        if (!pickup_goal->only_perform_feasibility_test)
+        {
+          result.grasp = new_grasps.at( execution_info.size() -1 );
+          action_server->setSucceeded(result);
+          return;
+        }
+      }
+      //see if continuation is possible
+      if (!execution_info.back().result_.continuation_possible)
+      {
+        if (pickup_goal->only_perform_feasibility_test)
+        {
+          ROS_ERROR("Continuation impossible when performing feasibility test");
+        }
+        result.grasp = new_grasps.at( execution_info.size() -1 );
+        if (execution_info.back().result_.result_code == GraspResult::LIFT_FAILED)
+          result.manipulation_result.value = ManipulationResult::LIFT_FAILED;
+        else
+          result.manipulation_result.value = ManipulationResult::FAILED;
+        action_server->setAborted(result);
+        return;
+      }
+      //remember how many grasps we've tried
+      tested_grasps += execution_info.size();
     }
     //all the grasps have been tested
     if (pickup_goal->only_perform_feasibility_test && result.manipulation_result.value == ManipulationResult::SUCCESS)
@@ -257,8 +362,12 @@ void ObjectManipulator::pickup(const PickupGoal::ConstPtr &pickup_goal,
     {
       action_server->setAborted(result);
     }
-    //PROF_STOP_TIMER(TOTAL_PICKUP_TIMER);
-    //PROF_PRINT_ALL;
+    return;
+  }
+  catch (InterruptRequestedException &ex)
+  {
+    ROS_DEBUG_NAMED("manipulation","Pickup goal preempted");
+    action_server->setPreempted();
     return;
   }
   catch (MoveArmStuckException &ex)
@@ -277,71 +386,92 @@ void ObjectManipulator::pickup(const PickupGoal::ConstPtr &pickup_goal,
   }
 }
 
+void ObjectManipulator::placeFeedback(
+                                 actionlib::SimpleActionServer<object_manipulation_msgs::PlaceAction> *action_server,
+                                 size_t tested_places, size_t total_places, size_t current_place)
+{
+  PlaceFeedback feedback;
+  feedback.total_locations = total_places;
+  feedback.current_location = current_place + tested_places;
+  action_server->publishFeedback(feedback);
+}
+
 void ObjectManipulator::place(const object_manipulation_msgs::PlaceGoal::ConstPtr &place_goal,
 			      actionlib::SimpleActionServer<object_manipulation_msgs::PlaceAction> *action_server)
 {
   PlaceResult result;
-  PlaceFeedback feedback;
-  PlaceExecutor *executor;
-  if (place_goal->use_reactive_place)
-  {
-    executor = reactive_place_executor_;
-  }
-  else
-  {
-    executor = place_executor_;
-  }
+  PlaceTester *place_tester = standard_place_tester_;
+  PlacePerformer *place_performer = standard_place_performer_;
+  if (place_goal->use_reactive_place) place_performer = reactive_place_performer_;
+  
+  place_tester->setInterruptFunction(
+               boost::bind(&actionlib::SimpleActionServer<object_manipulation_msgs::PlaceAction>::isPreemptRequested,
+                           action_server));
+  place_performer->setInterruptFunction(
+               boost::bind(&actionlib::SimpleActionServer<object_manipulation_msgs::PlaceAction>::isPreemptRequested,
+                           action_server));
 
-  feedback.total_locations = place_goal->place_locations.size();
-  feedback.current_location = 0;
-  action_server->publishFeedback(feedback);
-
+  std::vector<geometry_msgs::PoseStamped> place_locations = place_goal->place_locations;
   try
   {
+    std::vector<PlaceExecutionInfo> execution_info;
     result.manipulation_result.value = ManipulationResult::UNFEASIBLE;
-    for (size_t i=0; i<place_goal->place_locations.size(); i++)
+    size_t tested_places = 0;
+    while (!place_locations.empty())
     {
-      if (action_server->isPreemptRequested())
+      if (action_server->isPreemptRequested()) throw InterruptRequestedException();
+      place_tester->setFeedbackFunction(boost::bind(&ObjectManipulator::placeFeedback, 
+                                                    this, action_server, tested_places, place_locations.size(), _1));
+      //test a batch of locations
+      place_tester->testPlaces(*place_goal, place_locations, execution_info, 
+                               !place_goal->only_perform_feasibility_test);
+      if (execution_info.empty()) throw GraspException("place tester provided empty ExecutionInfo");
+      //try to perform them
+      if (!place_goal->only_perform_feasibility_test)
       {
-	action_server->setPreempted();
-	return;
+        place_performer->performPlaces(*place_goal, place_locations, execution_info);
       }
-      feedback.current_location = i+1;
-      action_server->publishFeedback(feedback);
-      geometry_msgs::PoseStamped place_location = place_goal->place_locations[i];
-      PlaceLocationResult location_result = executor->place(*place_goal, place_location);
-      ROS_INFO_STREAM("Place " << i+1 << "/" << place_goal->place_locations.size() << " result: " << 
-                      getPlaceLocationResultInfo(location_result));
-      ROS_DEBUG_NAMED("manipulation","Place location result code: %d; continuation: %d", location_result.result_code, 
-	       location_result.continuation_possible);
-      result.attempted_locations.push_back(place_goal->place_locations[i]);
-      result.attempted_location_results.push_back(location_result);
-      if (location_result.result_code == PlaceLocationResult::SUCCESS)
+      if (execution_info.empty()) throw GraspException("place performer provided empty ExecutionInfo");
+      //copy information about tested places over in result
+      std::vector<geometry_msgs::PoseStamped>::iterator it = place_locations.begin();
+      for (size_t i=0; i<execution_info.size(); i++)
       {
-	result.manipulation_result.value = ManipulationResult::SUCCESS;
-	if (!place_goal->only_perform_feasibility_test)
-	{
-	  result.place_location = place_goal->place_locations[i];
-	  action_server->setSucceeded(result);
-	  return;
-	}
-      }	  
-      if (!location_result.continuation_possible)
-      {
-	if (place_goal->only_perform_feasibility_test)
-	{
-	  ROS_ERROR("Continuation impossible when performing feasibility test");
-	}
-	result.place_location = place_goal->place_locations[i];
-	if (location_result.result_code == PlaceLocationResult::RETREAT_FAILED)
-	  result.manipulation_result.value = ManipulationResult::RETREAT_FAILED;
-	else
-	  result.manipulation_result.value = ManipulationResult::FAILED;
-	action_server->setAborted(result);
-	return;
+        result.attempted_locations.push_back(place_locations[i]);
+        result.attempted_location_results.push_back(execution_info[i].result_);
+        it++;
       }
+      //see if we're done
+      if (execution_info.back().result_.result_code == PlaceLocationResult::SUCCESS)
+      {
+        result.manipulation_result.value = ManipulationResult::SUCCESS;
+        if (!place_goal->only_perform_feasibility_test)
+        {
+          result.place_location = place_locations.at( execution_info.size() - 1 );
+          action_server->setSucceeded(result);
+          return;
+        }
+      }
+      //see if continuation is possible
+      if (!execution_info.back().result_.continuation_possible)
+      {
+        if (place_goal->only_perform_feasibility_test)
+        {
+          ROS_ERROR("Continuation impossible when performing feasibility test");
+        }
+        result.place_location = place_locations.at( execution_info.size() - 1 );
+        if (execution_info.back().result_.result_code == PlaceLocationResult::RETREAT_FAILED)
+          result.manipulation_result.value = ManipulationResult::RETREAT_FAILED;
+        else
+          result.manipulation_result.value = ManipulationResult::FAILED;
+        action_server->setAborted(result);
+        return;
+      }
+      //clear all the grasps we've tried
+      tested_places += execution_info.size();
+      execution_info.clear();      
+      place_locations.erase(place_locations.begin(), it);
     }
-    //all the place locations have been tested
+    //all the grasps have been tested
     if (place_goal->only_perform_feasibility_test && result.manipulation_result.value == ManipulationResult::SUCCESS)
     {
       action_server->setSucceeded(result);
@@ -350,6 +480,12 @@ void ObjectManipulator::place(const object_manipulation_msgs::PlaceGoal::ConstPt
     {
       action_server->setAborted(result);
     }
+    return;
+  }
+  catch (InterruptRequestedException &ex)
+  {
+    ROS_DEBUG_NAMED("manipulation","Place goal preempted");
+    action_server->setPreempted();
     return;
   }
   catch (MoveArmStuckException &ex)

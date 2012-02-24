@@ -71,7 +71,9 @@ GraspExecutor::collisionOperationsForLift(const object_manipulation_msgs::Pickup
 std::vector<arm_navigation_msgs::LinkPadding> 
 GraspExecutor::linkPaddingForLift(const object_manipulation_msgs::PickupGoal &pickup_goal)
 {
-  return concat(MechanismInterface::fingertipPadding(pickup_goal.arm_name, 0.0), 
+  //return concat(MechanismInterface::fingertipPadding(pickup_goal.arm_name, 0.0), 
+  //              pickup_goal.additional_link_padding);
+  return concat(MechanismInterface::gripperPadding(pickup_goal.arm_name, 0.0), 
                 pickup_goal.additional_link_padding);
 }
 
@@ -161,9 +163,10 @@ GraspExecutor::checkAndExecuteGrasp(const object_manipulation_msgs::PickupGoal &
   //check if there is anything in gripper; if not, open gripper and retreat
   if (!mechInterface().graspPostureQuery(pickup_goal.arm_name, grasp))
   {
-    ROS_DEBUG_NAMED("manipulation","Hand reports that grasp was not successfully executed; releasing object and retreating");
+    ROS_DEBUG_NAMED("manipulation","Hand reports that grasp was not successfully executed; "
+                    "releasing object and retreating");
     mechInterface().handPostureGraspAction(pickup_goal.arm_name, grasp,
-					   object_manipulation_msgs::GraspHandPostureExecutionGoal::RELEASE);    
+                                    object_manipulation_msgs::GraspHandPostureExecutionGoal::RELEASE, -1);    
     retreat(pickup_goal, grasp);
     return Result(GraspResult::GRASP_FAILED, false);
   }

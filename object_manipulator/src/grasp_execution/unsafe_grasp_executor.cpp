@@ -72,18 +72,18 @@ UnsafeGraspExecutor::executeGrasp(const object_manipulation_msgs::PickupGoal &pi
   
   //move to the pre-grasp using the Cartesian controller
   mechInterface().moveArmToPoseCartesian(pickup_goal.arm_name, pregrasp_pose, ros::Duration(15.0), 
-               .01, .09, 0.02, 0.16, 0.1, interpolated_grasp_trajectory_.points[interpolated_grasp_trajectory_.points.size()-1].positions);
+               .01, .09, 0.02, 0.16, 0.005, 0.087, 0.1, interpolated_grasp_trajectory_.points[interpolated_grasp_trajectory_.points.size()-1].positions);
 
   //move to the pre-grasp hand posture
   mechInterface().handPostureGraspAction(pickup_goal.arm_name, grasp, 
-					 object_manipulation_msgs::GraspHandPostureExecutionGoal::PRE_GRASP);
+                                         object_manipulation_msgs::GraspHandPostureExecutionGoal::PRE_GRASP, -1);
 
   //if not using reactive grasping, execute the unnormalized interpolated trajectory from pre-grasp to grasp
   if(!pickup_goal.use_reactive_execution)
   {  
     mechInterface().attemptTrajectory(pickup_goal.arm_name, interpolated_grasp_trajectory_, true);
     mechInterface().handPostureGraspAction(pickup_goal.arm_name, grasp, 
-					 object_manipulation_msgs::GraspHandPostureExecutionGoal::GRASP);    
+                                           object_manipulation_msgs::GraspHandPostureExecutionGoal::GRASP, pickup_goal.max_contact_force);    
   }
 
   //otherwise, call reactive grasping

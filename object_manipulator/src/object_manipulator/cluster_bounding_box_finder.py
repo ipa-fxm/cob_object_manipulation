@@ -136,7 +136,7 @@ class ClusterBoundingBoxFinder:
         return points_filtered
 
 
-    ##find the object frame and bounding box for a point cloud
+    ##find the object frame and bounding box for a PointCloud or PointCloud2
     #use the local rosparam z_up_frame to specify the desired frame to use where the z-axis is special (box z will be frame z)
     #if not specified, the point cloud's frame is assumed to be the desired z_up_frame
     def find_object_frame_and_bounding_box(self, point_cloud):

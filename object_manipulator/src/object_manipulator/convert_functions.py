@@ -46,15 +46,23 @@ from sensor_msgs.msg import PointCloud
 from std_msgs.msg import Header
 import tf.transformations
 import scipy
-from sensor_msgs.msg import PointCloud
+from sensor_msgs.msg import PointCloud, PointCloud2
+from object_manipulator.point_cloud import *
 
-##convert a point cloud to a 4xn scipy matrix (x y z 1)
+##convert a PointCloud or PointCloud2 to a 4xn scipy matrix (x y z 1)
 def point_cloud_to_mat(point_cloud):
-    points = [[p.x, p.y, p.z, 1] for p in point_cloud.points]
+    if type(point_cloud) == type(PointCloud()):
+        points = [[p.x, p.y, p.z, 1] for p in point_cloud.points]
+    elif type(point_cloud) == type(PointCloud2()):
+        points = [[p[0], p[1], p[2], 1] for p in read_points(point_cloud, field_names = 'xyz', skip_nans=True)]
+    else:
+        print "type not recognized:", type(point_cloud)
+        return None
     points = scipy.matrix(points).T
     return points
 
-##convert a 4xn scipy matrix (x y z 1) to a point cloud
+
+##convert a 4xn scipy matrix (x y z 1) to a PointCloud 
 def mat_to_point_cloud(mat, frame_id):
     pc = PointCloud()
     pc.header.frame_id = frame_id
@@ -65,38 +73,32 @@ def mat_to_point_cloud(mat, frame_id):
         pc.points.append(point)
     return pc 
 
-##convert a 4xn scipy matrix (x y z 1) to a point cloud
-def mat_to_point_cloud(mat, frame_id):
-    pc = PointCloud()
-    pc.header.frame_id = frame_id
-    for n in range(mat.shape[1]):
-        column = mat[:,n]
-        point = Point()
-        point.x, point.y, point.z = column[0,0], column[1,0], column[2,0]
-        pc.points.append(point)
-    return pc 
+###convert a 4xn scipy matrix (x y z 1) to a point cloud
+#def mat_to_point_cloud(mat, frame_id):
+#    pc = PointCloud()
+#    pc.header.frame_id = frame_id
+#    for n in range(mat.shape[1]):
+#        column = mat[:,n]
+#        point = Point()
+#        point.x, point.y, point.z = column[0,0], column[1,0], column[2,0]
+#        pc.points.append(point)
+#    return pc 
 
-
-##transform a PointCloud to be a 4xn scipy matrix (x y z 1) in a new frame
+##transform a PointCloud or PointCloud2 to be a 4xn scipy matrix (x y z 1) in a new frame
 def transform_point_cloud(tf_listener, point_cloud, frame):        
     points = point_cloud_to_mat(point_cloud)
-    point_cloud.header.stamp = rospy.Time(0)
-
-    #rospy.loginfo("waiting for transform: "+frame+" from "+point_cloud.header.frame_id)
-    try:
-        tf_listener.waitForTransform(frame, point_cloud.header.frame_id, rospy.Time(0), rospy.Duration(5))
-    except:
-        rospy.logerr("tf transform was not there!!")
+    transform = get_transform(tf_listener, point_cloud.header.frame_id, frame)
+    if transform == None:
         return (None, None)
-    #rospy.loginfo("got transform")
-
-    transform = tf_listener.asMatrix(frame, point_cloud.header) 
-    transform = scipy.matrix(transform)
+#    #rospy.loginfo("got transform")
+#
+#    transform = tf_listener.asMatrix(frame, point_cloud.header) 
+#    transform = scipy.matrix(transform)
     points = transform * points
-
-    #broadcast a 'new_base_link' frame (since showing things relative to 'base_link' doesn't seem to work in rviz for some reason)
-    #(pos, quat) = mat_to_pos_and_quat(transform**-1)
-    #tf_broadcaster.sendTransform(pos, quat, rospy.Time.now(), "new_base_link", cluster_frame) 
+#
+#    #broadcast a 'new_base_link' frame (since showing things relative to 'base_link' doesn't seem to work in rviz for some reason)
+#    #(pos, quat) = mat_to_pos_and_quat(transform**-1)
+#    #tf_broadcaster.sendTransform(pos, quat, rospy.Time.now(), "new_base_link", cluster_frame) 
 
     return (points, transform)
 
@@ -107,10 +109,11 @@ def get_transform(tf_listener, frame1, frame2):
     temp_header.frame_id = frame1
     temp_header.stamp = rospy.Time(0)
     try:
-        frame1_to_frame2 = tf_listener.asMatrix(frame2, temp_header)
+        tf_listener.waitForTransform(frame1, frame2, rospy.Time(0), rospy.Duration(5))
     except:
         rospy.logerr("tf transform was not there between %s and %s"%(frame1, frame2))
-        return scipy.matrix(scipy.identity(4))
+        return None
+    frame1_to_frame2 = tf_listener.asMatrix(frame2, temp_header)
     return scipy.matrix(frame1_to_frame2)
 
 

@@ -30,8 +30,8 @@
 *  ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 *  POSSIBILITY OF SUCH DAMAGE.
 *********************************************************************/
-#ifndef _HAND_DESCRIPTION_H_
-#define _HAND_DESCRIPTION_H_
+#ifndef _CONFIGURATION_LOADER_H_
+#define _CONFIGURATION_LOADER_H_
 
 #include <ros/ros.h>
 
@@ -41,20 +41,18 @@
 
 #include "object_manipulator/tools/exceptions.h"
 
-#include "configuration_loader.h"
-
 namespace object_manipulator {
 
   // aleeper: I sub-classed these parameter loading classes so we have a common class to work from.
   //          Hopefully it keeps things cleaner.
 
-  class HandDescription : public ConfigurationLoader
+class ConfigurationLoader
 {
- private:
-/* 
- //! Node handle in the root namespace
+protected:
+  //! Node handle in the root namespace
   ros::NodeHandle root_nh_;
 
+  //! Fetch a single string param
   inline std::string getStringParam(std::string name)
   {
     std::string value;
@@ -63,6 +61,7 @@ namespace object_manipulator {
     return value;
   }
 
+  //! Fetch a vector of strings param
   inline std::vector<std::string> getVectorParam(std::string name)
   {
     XmlRpc::XmlRpcValue list;
@@ -79,6 +78,7 @@ namespace object_manipulator {
     return values;	
   }
 
+  //! Fetch a vector of doubles param
   inline std::vector<double> getVectorDoubleParam(std::string name)
   {
     XmlRpc::XmlRpcValue list;
@@ -90,89 +90,36 @@ namespace object_manipulator {
       if (list[i].getType() != XmlRpc::XmlRpcValue::TypeDouble) throw BadParamException(name);
       values.push_back( static_cast<double>(list[i]) );
     }
-    return values;	
-  }
-*/
-
- public:
- HandDescription() {}
-
-  inline std::string gripperFrame(std::string arm_name)
-  {
-    return getStringParam("/hand_description/" + arm_name + "/hand_frame");
+    return values;
   }
 
-  inline std::string robotFrame(std::string arm_name)
+  //! Fetch a double param
+  inline double getDoubleParam(std::string name)
   {
-    return getStringParam("/hand_description/" + arm_name + "/robot_frame");
-  }
-  
-  inline std::string attachedName(std::string arm_name)
-  {
-    return getStringParam("/hand_description/" + arm_name + "/attached_objects_name");
-  }
-  
-  inline std::string attachLinkName(std::string arm_name)
-  {
-    return getStringParam("/hand_description/" + arm_name + "/attach_link");
-  }
-  
-  inline std::string gripperCollisionName(std::string arm_name)
-  {
-    return getStringParam("/hand_description/" + arm_name + "/hand_group_name");
-  }
-  
-  inline std::string armGroup(std::string arm_name)
-  {
-    return getStringParam("/hand_description/" + arm_name + "/arm_group_name");    
-  }
-  
-  inline std::string handDatabaseName(std::string arm_name)
-  {
-    return getStringParam("/hand_description/" + arm_name + "/hand_database_name");
-  }
-  
-  inline std::vector<std::string> handJointNames(std::string arm_name)
-  {
-    return getVectorParam("/hand_description/" + arm_name + "/hand_joints");
-  }
-  
-  inline std::vector<std::string> gripperTouchLinkNames(std::string arm_name)
-  {
-    return getVectorParam("/hand_description/" + arm_name + "/hand_touch_links");
-  }
-  
-  inline std::vector<std::string> fingertipLinks(std::string arm_name)
-  {
-    return getVectorParam("/hand_description/" + arm_name + "/hand_fingertip_links");
+    double value;
+    if (!root_nh_.getParamCached(name, value)) throw MissingParamException(name);
+    return value;
   }
 
-  inline geometry_msgs::Vector3 approachDirection(std::string arm_name)
+  //! Fetch a bool param
+  inline bool getBoolParam(std::string name)
   {
-    std::string name = "/hand_description/" + arm_name + "/hand_approach_direction";
-    std::vector<double> values = getVectorDoubleParam(name);
-    if ( values.size() != 3 )  throw BadParamException(name);
-    double length = sqrt( values[0]*values[0] + values[1]*values[1] + values[2]*values[2] );
-    if ( fabs(length) < 1.0e-5 ) throw BadParamException(name);
-    geometry_msgs::Vector3 app;
-    app.x = values[0] / length;
-    app.y = values[1] / length;
-    app.z = values[2] / length;
-    return app;
+    bool value;
+    if (!root_nh_.getParamCached(name, value)) throw MissingParamException(name);
+    return value;
   }
 
-  inline std::vector<std::string> armJointNames(std::string arm_name)
-  {
-    return getVectorParam("/hand_description/" + arm_name + "/arm_joints");
-  }
+public:
+  //! We should maybe create a instance() member function and make the contructor protected...
+  ConfigurationLoader() : root_nh_("~") {}
 
 };
 
 //! Returns a hand description singleton
-inline HandDescription& handDescription()
+inline ConfigurationLoader& configurationLoader()
 {
-  static HandDescription hand_description;
-  return hand_description;
+  static ConfigurationLoader singleton;
+  return singleton;
 }
 
 } //namespace object_manipulator

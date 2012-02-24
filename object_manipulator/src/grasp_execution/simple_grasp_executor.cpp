@@ -92,7 +92,7 @@ SimpleGraspExecutor::executeGrasp(const object_manipulation_msgs::PickupGoal &pi
   //demo_synchronizer::getClient().rviz(1, "Collision models;Planning goal;Collision map;Environment contacts");
 
   mechInterface().handPostureGraspAction(pickup_goal.arm_name, grasp, 
-					 object_manipulation_msgs::GraspHandPostureExecutionGoal::PRE_GRASP);
+                                         object_manipulation_msgs::GraspHandPostureExecutionGoal::PRE_GRASP, -1);
 
   if ( !mechInterface().attemptMoveArmToGoal(pickup_goal.arm_name, ik_response_.solution.joint_state.position,
                                              pickup_goal.additional_collision_operations,
@@ -104,7 +104,7 @@ SimpleGraspExecutor::executeGrasp(const object_manipulation_msgs::PickupGoal &pi
   }
 
   mechInterface().handPostureGraspAction(pickup_goal.arm_name, grasp, 
-					 object_manipulation_msgs::GraspHandPostureExecutionGoal::GRASP);    
+                                         object_manipulation_msgs::GraspHandPostureExecutionGoal::GRASP, pickup_goal.max_contact_force);    
   if (marker_publisher_) marker_publisher_->colorGraspMarker(marker_id_, 0.0, 1.0, 0.0); //green
   return Result(GraspResult::SUCCESS, true);
 }

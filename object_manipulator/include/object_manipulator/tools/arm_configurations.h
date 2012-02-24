@@ -41,11 +41,14 @@
 
 #include "object_manipulator/tools/exceptions.h"
 
+#include "configuration_loader.h"
+
 namespace object_manipulator {
 
-class ArmConfigurations
+class ArmConfigurations : public ConfigurationLoader
 {
  private:
+/*
   //! Node handle in the root namespace
   ros::NodeHandle root_nh_;
 
@@ -86,9 +89,10 @@ class ArmConfigurations
     }
     return values;	
   }
+*/
 
  public:
- ArmConfigurations() : root_nh_("~") {}
+ ArmConfigurations() {}
 
   inline std::vector< double > position(std::string arm_name, std::string position)
   {

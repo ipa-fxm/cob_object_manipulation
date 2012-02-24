@@ -177,6 +177,12 @@ namespace msg
       return createPoseStampedMsg( createPoseMsg(ts.transform.translation, ts.transform.rotation), ts.header.frame_id, ts.header.stamp );
     }
 
+    inline geometry_msgs::PoseStamped createPoseStampedMsg(const btTransform &pose, const std::string &frame_id, const ros::Time &stamp)
+    {
+
+      return createPoseStampedMsg( createPoseMsg(pose), frame_id, stamp );
+    }
+
     // --------------------------------------------------------------------------------------------
     inline geometry_msgs::Transform createTransformMsg(const geometry_msgs::Point &v, const geometry_msgs::Quaternion &q)
     {

@@ -64,7 +64,7 @@ ReactiveGraspExecutor::executeGrasp(const object_manipulation_msgs::PickupGoal &
   }
 
   mechInterface().handPostureGraspAction(pickup_goal.arm_name, grasp, 
-					 object_manipulation_msgs::GraspHandPostureExecutionGoal::PRE_GRASP);
+                                         object_manipulation_msgs::GraspHandPostureExecutionGoal::PRE_GRASP, -1);
   
   geometry_msgs::PoseStamped final_grasp_pose_stamped;
   final_grasp_pose_stamped.pose = grasp.grasp_pose;
@@ -79,6 +79,7 @@ ReactiveGraspExecutor::executeGrasp(const object_manipulation_msgs::PickupGoal &
   reactive_grasp_goal.collision_support_surface_name = pickup_goal.collision_support_surface_name;
   reactive_grasp_goal.pre_grasp_posture = grasp.pre_grasp_posture;
   reactive_grasp_goal.grasp_posture = grasp.grasp_posture;
+  reactive_grasp_goal.max_contact_force = pickup_goal.max_contact_force;
 
   //demo_synchronizer::getClient().sync(2, "Calling fingertip reactive grasping module to execute grasp");
   //demo_synchronizer::getClient().rviz(1, "Collision models");

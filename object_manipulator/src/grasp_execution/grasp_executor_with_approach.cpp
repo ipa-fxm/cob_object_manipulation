@@ -82,7 +82,9 @@ GraspExecutorWithApproach::collisionOperationsForGrasp(const object_manipulation
 std::vector<arm_navigation_msgs::LinkPadding> 
 GraspExecutorWithApproach::linkPaddingForGrasp(const object_manipulation_msgs::PickupGoal &pickup_goal)
 {
-  return concat(MechanismInterface::fingertipPadding(pickup_goal.arm_name, 0.0), 
+  //return concat(MechanismInterface::fingertipPadding(pickup_goal.arm_name, 0.0), 
+  //              pickup_goal.additional_link_padding);
+  return concat(MechanismInterface::gripperPadding(pickup_goal.arm_name, 0.0), 
                 pickup_goal.additional_link_padding);
 }
 
@@ -122,7 +124,7 @@ GraspExecutorWithApproach::getInterpolatedIKForGrasp(const object_manipulation_m
     ROS_DEBUG_NAMED("manipulation","  Grasp executor: interpolated IK for grasp below min threshold");
     if (grasp_trajectory.points.empty())
     {
-      ROS_DEBUG_NAMED("manipulation","  Grasp executor: interpolaed IK empty, problem is with grasp location");
+      ROS_DEBUG_NAMED("manipulation","  Grasp executor: interpolated IK empty, problem is with grasp location");
       if (marker_publisher_) marker_publisher_->colorGraspMarker(marker_id_, 1.0, 1.0, 0.0); //yellow
       if (error_code == ArmNavigationErrorCodes::COLLISION_CONSTRAINTS_VIOLATED) 
 	return Result(GraspResult::GRASP_IN_COLLISION, true);
@@ -216,7 +218,7 @@ GraspExecutorWithApproach::executeGrasp(const object_manipulation_msgs::PickupGo
   }
 
   mechInterface().handPostureGraspAction(pickup_goal.arm_name, grasp, 
-					 object_manipulation_msgs::GraspHandPostureExecutionGoal::PRE_GRASP);
+                                         object_manipulation_msgs::GraspHandPostureExecutionGoal::PRE_GRASP, -1);
 
   //demo_synchronizer::getClient().sync(2, "Executing interpolated IK path from pre-grasp to grasp");
   //demo_synchronizer::getClient().rviz(1, "Collision models");
@@ -225,7 +227,7 @@ GraspExecutorWithApproach::executeGrasp(const object_manipulation_msgs::PickupGo
   mechInterface().attemptTrajectory(pickup_goal.arm_name, interpolated_grasp_trajectory_, true);
 
   mechInterface().handPostureGraspAction(pickup_goal.arm_name, grasp, 
-					 object_manipulation_msgs::GraspHandPostureExecutionGoal::GRASP);    
+                                         object_manipulation_msgs::GraspHandPostureExecutionGoal::GRASP, pickup_goal.max_contact_force);    
 
   if (marker_publisher_) marker_publisher_->colorGraspMarker(marker_id_, 0.0, 1.0, 0.0); //green
   return Result(GraspResult::SUCCESS, true);

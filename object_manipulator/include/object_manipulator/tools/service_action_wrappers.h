@@ -76,7 +76,7 @@ class ServiceWrapper
     if (!initialized_)
     {
       ros::Duration ping_time = ros::Duration(1.0);
-      if (timeout >= ros::Duration(0) && ping_time > timeout) ping_time = timeout;
+      if (timeout > ros::Duration(0) && ping_time > timeout) ping_time = timeout;
       ros::Time start_time = ros::Time::now();
       while (1)
       {
@@ -85,7 +85,7 @@ class ServiceWrapper
         if (interrupt_function_ && interrupt_function_()) throw InterruptRequestedException();
 	if (!ros::ok()) throw ServiceNotFoundException(service_name_);
 	ros::Time current_time = ros::Time::now();
-	if (timeout >= ros::Duration(0) && current_time - start_time >= timeout) 
+	if (timeout > ros::Duration(0) && current_time - start_time >= timeout) 
 	  throw ServiceNotFoundException(service_name_);
       }
       client_ = nh_.serviceClient<ServiceDataType>(service_name_);	
@@ -93,6 +93,8 @@ class ServiceWrapper
     }
     return client_;
   }
+
+  bool isInitialized() const {return initialized_;}
 };
 
 //! A wrapper for multiple instances of a given service, one for each arm in the system
@@ -158,7 +160,7 @@ class MultiArmServiceWrapper
 
       //new service; wait for it
       ros::Duration ping_time = ros::Duration(1.0);
-      if (timeout >= ros::Duration(0) && ping_time > timeout) ping_time = timeout;
+      if (timeout > ros::Duration(0) && ping_time > timeout) ping_time = timeout;
       ros::Time start_time = ros::Time::now();
       while(1)
       {
@@ -166,7 +168,7 @@ class MultiArmServiceWrapper
         if (interrupt_function_ && interrupt_function_()) throw InterruptRequestedException();
 	if (!ros::ok()) throw ServiceNotFoundException(client_name + " remapped to " + service_name);
 	ros::Time current_time = ros::Time::now();
-	if (timeout >= ros::Duration(0) && current_time - start_time >= timeout) 
+	if (timeout > ros::Duration(0) && current_time - start_time >= timeout) 
 	  throw ServiceNotFoundException(client_name + " remapped to " + service_name);
 	ROS_INFO_STREAM("Waiting for service " << client_name << " remapped to " << service_name);
       }
@@ -181,6 +183,17 @@ class MultiArmServiceWrapper
     }
 };
 
+//! Cancels all goals of the client when it goes out of scope
+template <class ActionDataType>
+class ScopedGoalCancel
+{
+private:
+  actionlib::SimpleActionClient<ActionDataType> *client_;
+public:
+  ScopedGoalCancel(actionlib::SimpleActionClient<ActionDataType> *client) : client_(client) {}
+  void setClient(actionlib::SimpleActionClient<ActionDataType> *client){client_ = client;}
+  ~ScopedGoalCancel(){if (client_) client_->cancelAllGoals();}
+};
 
 //! Wrapper class for SimpleActionClient that checks server availability on first use
 template <class ActionDataType>
@@ -191,6 +204,8 @@ class ActionWrapper
   bool initialized_;
   //! The name of the action
   std::string action_name_;
+  //! The remapped name/topic of the action
+  std::string remapped_name_;
   //! The node handle to be used when initializing services
   ros::NodeHandle nh_;  
   //! The actual action client
@@ -198,10 +213,11 @@ class ActionWrapper
   //! Function used to check for interrupts
   boost::function<bool()> interrupt_function_;
  public:
- ActionWrapper(std::string action_name, bool param) : initialized_(false),
+ ActionWrapper(std::string action_name, bool spin_thread) : initialized_(false),
     action_name_(action_name),
+    remapped_name_("*name failed to remap!*"),
     nh_(""),
-    client_(nh_, action_name, param) {}
+    client_(nh_, action_name, spin_thread) {}
 
   //! Sets the interrupt function
   void setInterruptFunction(boost::function<bool()> f){interrupt_function_ = f;}
@@ -210,8 +226,10 @@ class ActionWrapper
   {
     if (!initialized_)
     {
+      // aleeper: Added this to aid with remapping debugging.
+      remapped_name_ = nh_.resolveName(action_name_, true);
       ros::Duration ping_time = ros::Duration(1.0);
-      if (timeout >= ros::Duration(0) && ping_time > timeout) ping_time = timeout;
+      if (timeout > ros::Duration(0) && ping_time > timeout) ping_time = timeout;
       ros::Time start_time = ros::Time::now();
       while (1)
       {
@@ -219,14 +237,34 @@ class ActionWrapper
         if (interrupt_function_ && interrupt_function_()) throw InterruptRequestedException();
 	if (!ros::ok()) throw ServiceNotFoundException(action_name_);
 	ros::Time current_time = ros::Time::now();
-	if (timeout >= ros::Duration(0) && current_time - start_time >= timeout) 
+	if (timeout > ros::Duration(0) && current_time - start_time >= timeout) 
 	  throw ServiceNotFoundException(action_name_);
-	ROS_INFO_STREAM("Waiting for action client: " << action_name_);
+	ROS_INFO_STREAM("Waiting for action client: " << action_name_ << " remapped to " << remapped_name_);
       }
       initialized_ = true;
     }
     return client_;
   }
+
+  bool waitForResult(const ros::Duration &timeout=ros::Duration(0,0))
+  {
+    ros::Duration ping_time = ros::Duration(5.0);
+    if (timeout > ros::Duration(0) && ping_time > timeout) ping_time = timeout;
+    ros::Time start_time = ros::Time::now();
+    while (1)
+    {
+      if (client().waitForResult(ping_time)) return true;
+      if (interrupt_function_ && interrupt_function_()) throw InterruptRequestedException();
+      //we should probably throw something else here
+      if (!ros::ok()) throw ServiceNotFoundException(action_name_);
+      ros::Time current_time = ros::Time::now();
+      if (timeout > ros::Duration(0) && current_time - start_time >= timeout) return false;
+      if (!client().isServerConnected()) return false;
+      ROS_INFO_STREAM("Waiting for result from action client: " << action_name_ << " remapped to " << remapped_name_);
+    }
+  }
+
+  bool isInitialized() const {return initialized_;}
 };
 
 
@@ -315,7 +353,7 @@ class MultiArmActionWrapper
   std::string suffix_;
   
   //! Parameter to be passed on to the action client
-  bool param_;
+  bool spin_thread_;
 
   /*! It seems the SimpleActionClient is non-copyable, so I could not store them directly in the map. */
   typedef std::map<std::string, actionlib::SimpleActionClient<ActionDataType>* > map_type;
@@ -332,8 +370,8 @@ class MultiArmActionWrapper
 
  public:
   //! Sets the node handle, prefix and suffix
- MultiArmActionWrapper(std::string prefix, std::string suffix, bool param, bool resolve_names) : 
-  nh_(""), prefix_(prefix), suffix_(suffix), param_(param), resolve_names_(resolve_names)
+ MultiArmActionWrapper(std::string prefix, std::string suffix, bool spin_thread, bool resolve_names) : 
+  nh_(""), prefix_(prefix), suffix_(suffix), spin_thread_(spin_thread), resolve_names_(resolve_names)
   {}
 
   //! Sets the interrupt function
@@ -370,11 +408,11 @@ class MultiArmActionWrapper
 
       //create new action client and insert in map
       actionlib::SimpleActionClient<ActionDataType>* new_client = 
-	new actionlib::SimpleActionClient<ActionDataType>(nh_, action_name, param_ );
+	new actionlib::SimpleActionClient<ActionDataType>(nh_, action_name, spin_thread_ );
 
       //wait for the server
       ros::Duration ping_time = ros::Duration(1.0);
-      if (timeout >= ros::Duration(0) && ping_time > timeout) ping_time = timeout;
+      if (timeout > ros::Duration(0) && ping_time > timeout) ping_time = timeout;
       ros::Time start_time = ros::Time::now();
       while (1)
       {
@@ -382,7 +420,7 @@ class MultiArmActionWrapper
         if (interrupt_function_ && interrupt_function_()) throw InterruptRequestedException();
 	if (!ros::ok()) throw ServiceNotFoundException(client_name + " remapped to " + action_name);
 	ros::Time current_time = ros::Time::now();
-	if (timeout >= ros::Duration(0) && current_time - start_time >= timeout) 
+	if (timeout > ros::Duration(0) && current_time - start_time >= timeout) 
 	  throw ServiceNotFoundException(client_name + " remapped to " + action_name);
 	ROS_INFO_STREAM("Waiting for action client " << client_name << ", remapped to " << action_name);
       }
@@ -393,9 +431,28 @@ class MultiArmActionWrapper
 			 (client_name, new_client ) );
 
       //and return it
-      return *(new_pair.first->second);
-      
+      return *(new_pair.first->second);      
     }
+
+  //! The action client for the requested arm waits for result
+  bool waitForResult(std::string arm_name, const ros::Duration &timeout=ros::Duration(0,0))
+  {
+    ros::Duration ping_time = ros::Duration(1.0);
+    if (timeout > ros::Duration(0) && ping_time > timeout) ping_time = timeout;
+    ros::Time start_time = ros::Time::now();
+    while (1)
+    {
+      if (client(arm_name).waitForResult(ping_time)) return true;
+      if (interrupt_function_ && interrupt_function_()) throw InterruptRequestedException();
+      //we should probably throw something else here
+      if (!ros::ok()) throw ServiceNotFoundException(arm_name);
+      ros::Time current_time = ros::Time::now();
+      if (timeout > ros::Duration(0) && current_time - start_time >= timeout) return false;
+      if (!client(arm_name).isServerConnected()) return false;
+      ROS_INFO_STREAM("Waiting for result from multi-arm action client on arm " << arm_name);
+    }
+  }
+
 };
 
 
