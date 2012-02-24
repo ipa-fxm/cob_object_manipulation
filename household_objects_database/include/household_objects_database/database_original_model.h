@@ -60,6 +60,7 @@ class DatabaseOriginalModel : public database_interface::DBClass
   database_interface::DBField<std::string> description_;
   database_interface::DBField<std::string> barcode_;
   database_interface::DBField<std::string> acquisition_method_;
+  database_interface::DBField<std::string> recognition_id_;
   database_interface::DBField<bool> concave_filled_;
 
   //! Places all the fields in the fields_ vector and sets foreign keys and sequences
@@ -82,6 +83,7 @@ class DatabaseOriginalModel : public database_interface::DBClass
     fields_.push_back(&description_);
     fields_.push_back(&barcode_);
     fields_.push_back(&acquisition_method_);
+    fields_.push_back(&recognition_id_);
     fields_.push_back(&concave_filled_);
     
     //sequences
@@ -126,6 +128,8 @@ class DatabaseOriginalModel : public database_interface::DBClass
     description_(database_interface::DBFieldBase::TEXT, this, "original_model_description", "original_model", true),
     barcode_(database_interface::DBFieldBase::TEXT, this, "original_model_barcode", "original_model", true),
     acquisition_method_(database_interface::DBFieldBase::TEXT, this, "acquisition_method_name", "original_model", true),
+    recognition_id_(database_interface::DBFieldBase::TEXT, this, "original_model_recognition_id", 
+                    "original_model", true),
     concave_filled_(database_interface::DBFieldBase::TEXT, this, "original_model_concave_filled", 
 		    "original_model", true)
   {
@@ -146,6 +150,7 @@ class DatabaseOriginalModel : public database_interface::DBClass
     description_(this, &other->description_),
     barcode_(this, &other->barcode_),
     acquisition_method_(this, &other->acquisition_method_),
+    recognition_id_(this, &other->recognition_id_),
     concave_filled_(this, &other->concave_filled_)
       {
 	initFields();

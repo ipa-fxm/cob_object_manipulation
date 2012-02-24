@@ -14,6 +14,7 @@
   <depend package="database_interface"/>
   <depend package="roscpp"/>
   <depend package="tf"/>
+  <depend package="actionlib"/>
   <depend package="household_objects_database_msgs"/>
   <depend package="object_manipulation_msgs"/>
 

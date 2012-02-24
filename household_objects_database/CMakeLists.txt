@@ -42,7 +42,7 @@ target_link_libraries(objects_database_node ${PROJECT_NAME})
 
 rosbuild_add_executable(insert_model src/insert_model.cpp)
 target_link_libraries(insert_model ${PROJECT_NAME})
-target_link_libraries(insert_model mesh_loader)
+target_link_libraries(insert_model mesh_loader boost_filesystem boost_system)
 
 
 

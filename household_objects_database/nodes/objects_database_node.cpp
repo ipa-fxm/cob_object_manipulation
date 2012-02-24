@@ -42,10 +42,13 @@
 
 #include <ros/ros.h>
 
+#include <actionlib/server/simple_action_server.h>
+
 #include <tf/transform_datatypes.h>
 #include <tf/transform_listener.h>
 
 #include <object_manipulation_msgs/GraspPlanning.h>
+#include <object_manipulation_msgs/GraspPlanningAction.h>
 
 #include <household_objects_database_msgs/GetModelList.h>
 #include <household_objects_database_msgs/GetModelMesh.h>
@@ -53,6 +56,7 @@
 #include <household_objects_database_msgs/GetModelScans.h>
 #include <household_objects_database_msgs/DatabaseScan.h>
 #include <household_objects_database_msgs/SaveScan.h>
+#include <household_objects_database_msgs/TranslateRecognitionId.h>
 
 #include "household_objects_database/objects_database.h"
 
@@ -62,6 +66,8 @@ const std::string GET_DESCRIPTION_SERVICE_NAME = "get_model_description";
 const std::string GRASP_PLANNING_SERVICE_NAME = "database_grasp_planning";
 const std::string GET_SCANS_SERVICE_NAME = "get_model_scans";
 const std::string SAVE_SCAN_SERVICE_NAME = "save_model_scan";
+const std::string TRANSLATE_ID_SERVICE_NAME = "translate_id";
+const std::string GRASP_PLANNING_ACTION_NAME = "database_grasp_planning";
 
 using namespace household_objects_database_msgs;
 using namespace household_objects_database;
@@ -150,11 +156,17 @@ private:
   //! Server for the get grasps service
   ros::ServiceServer grasp_planning_srv_;
 
+  //! The action server for grasping planning
+  actionlib::SimpleActionServer<object_manipulation_msgs::GraspPlanningAction> *grasp_planning_server_;  
+
   //! Server for the get scans service
   ros::ServiceServer get_scans_srv_;
 
   //! Server for the save scan service
   ros::ServiceServer save_scan_srv_;
+
+  //! Server for the id translation service
+  ros::ServiceServer translate_id_srv_;
 
   //! The database connection itself
   ObjectsDatabase *database_;
@@ -167,6 +179,34 @@ private:
 
   //! Threshold for pruning grasps based on table clearance
   double prune_table_clearance_;
+
+  bool translateIdCB(TranslateRecognitionId::Request &request, TranslateRecognitionId::Response &response)
+  {
+    std::vector<boost::shared_ptr<DatabaseScaledModel> > models;
+    if (!database_)
+    {
+      ROS_ERROR("Translate is service: database not connected");
+      response.result = response.DATABASE_ERROR;
+      return true;
+    }
+    if (!database_->getScaledModelsByRecognitionId(models, request.recognition_id))
+    {
+      ROS_ERROR("Translate is service: query failed");
+      response.result = response.DATABASE_ERROR;
+      return true;
+    }
+    if (models.empty())
+    {
+      ROS_ERROR("Translate is service: recognition id %s not found", request.recognition_id.c_str());
+      response.result = response.ID_NOT_FOUND;
+      return true;
+    }
+    response.household_objects_id = models[0]->id_.data();
+    if (models.size() > 1) ROS_WARN("Multiple matches found for recognition id %s. Returning the first one.",
+                                    request.recognition_id.c_str());
+    response.result = response.SUCCESS;
+    return true;
+  }
 
   //! Callback for the get models service
   bool getModelsCB(GetModelList::Request &request, GetModelList::Response &response)
@@ -284,6 +324,11 @@ private:
 	  (table_clearance_threshold >= 0.0 && (*prune_it)->table_clearance_.get() < table_clearance_threshold*1.0e3) ) */
       if ((*prune_it)->quality_.get() >= -40)
       {
+	if (gripper_threshold >= 0.0 && (*prune_it)->final_grasp_posture_.get().joint_angles_[0] > gripper_threshold)
+	    ROS_DEBUG("gripper_threshold: %.2f, joint_angles: %.2f, pruning grasp", 
+		      gripper_threshold, (*prune_it)->final_grasp_posture_.get().joint_angles_[0]);
+	else ROS_DEBUG("table_clearance_threshold: %.2f, table_clearance: %.2f, pruning grasp", 
+		       table_clearance_threshold,(*prune_it)->table_clearance_.get()); 
 	prune_it = grasps.erase(prune_it);
 	pruned++;
       } 
@@ -308,54 +353,58 @@ private:
     return out_pose;
   }
 
-  //! Callback for the get grasps service
-  bool graspPlanningCB(GraspPlanning::Request &request, GraspPlanning::Response &response)
+  //retrieves all grasps from the database for a given target
+  bool getGrasps(const GraspableObject &target, const std::string &arm_name, 
+                 std::vector<Grasp> &grasps, GraspPlanningErrorCode &error_code)
   {
     if (!database_)
     {
       ROS_ERROR("Database grasp planning: database not connected");
-      response.error_code.value = response.error_code.OTHER_ERROR;
-      return true;
+      error_code.value = error_code.OTHER_ERROR;
+      return false;
     }
 
-    if (request.target.potential_models.empty())
+    if (target.potential_models.empty())
     {
       ROS_ERROR("Database grasp planning: no potential model information in grasp planning target");
-      response.error_code.value = response.error_code.OTHER_ERROR;
-      return true;      
+      error_code.value = error_code.OTHER_ERROR;
+      return false;      
     }
 
-    if (request.target.potential_models.size() > 1)
+    if (target.potential_models.size() > 1)
     {
       ROS_WARN("Database grasp planning: target has more than one potential models. "
                "Returning grasps for first model only");
     }
 
     HandDescription hd;
-    int model_id = request.target.potential_models[0].model_id;
-    std::string hand_id = hd.handDatabaseName(request.arm_name);
+    int model_id = target.potential_models[0].model_id;
+    std::string hand_id = hd.handDatabaseName(arm_name);
     
     //retrieve the raw grasps from the database
-    std::vector< boost::shared_ptr<DatabaseGrasp> > grasps;
-    if (!database_->getClusterRepGrasps(model_id, hand_id, grasps))
+    std::vector< boost::shared_ptr<DatabaseGrasp> > db_grasps;
+    if (!database_->getClusterRepGrasps(model_id, hand_id, db_grasps))
     {
       ROS_ERROR("Database grasp planning: database query error");
-      response.error_code.value = response.error_code.OTHER_ERROR;
-      return true;
+      error_code.value = error_code.OTHER_ERROR;
+      return false;
     }
-    ROS_INFO("Database object node: retrieved %u grasps from database", (unsigned int)grasps.size());
+    ROS_INFO("Database object node: retrieved %u grasps from database", (unsigned int)db_grasps.size());
     
     //prune the retrieved grasps
-    pruneGraspList(grasps, prune_gripper_opening_, prune_table_clearance_);
+    pruneGraspList(db_grasps, prune_gripper_opening_, prune_table_clearance_);
+
+    //randomize the order of the grasps
+    std::random_shuffle(db_grasps.begin(), db_grasps.end());
 
     //convert to the Grasp data type
     std::vector< boost::shared_ptr<DatabaseGrasp> >::iterator it;
-    for (it = grasps.begin(); it != grasps.end(); it++)
+    for (it = db_grasps.begin(); it != db_grasps.end(); it++)
     {
       ROS_ASSERT( (*it)->final_grasp_posture_.get().joint_angles_.size() == 
 		  (*it)->pre_grasp_posture_.get().joint_angles_.size() );
       Grasp grasp;
-      std::vector<std::string> joint_names = hd.handJointNames(request.arm_name);
+      std::vector<std::string> joint_names = hd.handJointNames(arm_name);
 
       if (hand_id == "Schunk")
       {
@@ -435,40 +484,80 @@ private:
       //the pose of the grasp
       grasp.grasp_pose = (*it)->final_grasp_pose_.get().pose_;
       //convert it to the frame of the detection
-      grasp.grasp_pose = multiplyPoses(request.target.potential_models[0].pose.pose, grasp.grasp_pose);
+      grasp.grasp_pose = multiplyPoses(target.potential_models[0].pose.pose, grasp.grasp_pose);
       //and then finally to the reference frame of the object
-      if (request.target.potential_models[0].pose.header.frame_id !=
-          request.target.reference_frame_id)
+      if (target.potential_models[0].pose.header.frame_id !=
+          target.reference_frame_id)
       {
         tf::StampedTransform ref_trans;
         try
         {
-          listener_.lookupTransform(request.target.reference_frame_id,
-                                    request.target.potential_models[0].pose.header.frame_id,                    
+          listener_.lookupTransform(target.reference_frame_id,
+                                    target.potential_models[0].pose.header.frame_id,                    
                                     ros::Time(0), ref_trans);
         }
         catch (tf::TransformException ex)
         {
           ROS_ERROR("Grasp planner: failed to get transform from %s to %s; exception: %s", 
-                    request.target.reference_frame_id.c_str(), 
-                    request.target.potential_models[0].pose.header.frame_id.c_str(), ex.what());
-          response.error_code.value = response.error_code.OTHER_ERROR;
-          return true;      
+                    target.reference_frame_id.c_str(), 
+                    target.potential_models[0].pose.header.frame_id.c_str(), ex.what());
+          error_code.value = error_code.OTHER_ERROR;
+          return false;      
         }        
         geometry_msgs::Pose ref_pose;
         tf::poseTFToMsg(ref_trans, ref_pose);
         grasp.grasp_pose = multiplyPoses(ref_pose, grasp.grasp_pose);
       }
-	  //stick the scaled quality into the success_probability field
-	  grasp.success_probability = (*it)->scaled_quality_.get();
+      //stick the scaled quality into the success_probability field
+      grasp.success_probability = (*it)->scaled_quality_.get();
 
       //insert the new grasp in the list
-      response.grasps.push_back(grasp);
+      grasps.push_back(grasp);
     }
 
-    ROS_INFO("Database grasp planner: returning %u grasps", (unsigned int)response.grasps.size());
-    response.error_code.value = response.error_code.SUCCESS;
+    ROS_INFO("Database grasp planner: returning %u grasps", (unsigned int)grasps.size());
+    error_code.value = error_code.SUCCESS;
     return true;
+  }
+
+  //! Callback for the get grasps service
+  bool graspPlanningCB(GraspPlanning::Request &request, GraspPlanning::Response &response)
+  {
+    getGrasps(request.target, request.arm_name, response.grasps, response.error_code);
+    return true;
+  }
+
+  void graspPlanningActionCB(const object_manipulation_msgs::GraspPlanningGoalConstPtr &goal)
+  {
+    std::vector<Grasp> grasps;
+    GraspPlanningErrorCode error_code;
+    GraspPlanningResult result;
+    GraspPlanningFeedback feedback;
+    bool success = getGrasps(goal->target, goal->arm_name, grasps, error_code);
+    /*
+    for (size_t i=0; i<grasps.size(); i++)
+    {
+      if (grasp_planning_server_->isPreemptRequested()) 
+      {
+        grasp_planning_server_->setAborted(result);
+        return;
+      }
+      feedback.grasps.push_back(grasps[i]);
+      if ( (i+1)%10==0)
+      {
+        grasp_planning_server_->publishFeedback(feedback);
+        ros::Duration(10.0).sleep();
+      }
+    }
+    */
+    result.grasps = grasps;
+    result.error_code = error_code;
+    if (!success) 
+    {
+      grasp_planning_server_->setAborted(result);
+      return;
+    }
+    grasp_planning_server_->setSucceeded(result);
   }
 
 public:
@@ -506,14 +595,24 @@ public:
                                                &ObjectsDatabaseNode::getScansCB, this);
     save_scan_srv_ = priv_nh_.advertiseService(SAVE_SCAN_SERVICE_NAME,
                                                &ObjectsDatabaseNode::saveScanCB, this);
+    translate_id_srv_ = priv_nh_.advertiseService(TRANSLATE_ID_SERVICE_NAME, 
+                                                  &ObjectsDatabaseNode::translateIdCB, this);
+
+    grasp_planning_server_ = new actionlib::SimpleActionServer<object_manipulation_msgs::GraspPlanningAction>
+      (root_nh_, GRASP_PLANNING_ACTION_NAME, 
+       boost::bind(&ObjectsDatabaseNode::graspPlanningActionCB, this, _1), false);
+    grasp_planning_server_->start();
 
     priv_nh_.param<double>("prune_gripper_opening", prune_gripper_opening_, 0.5);
+    ROS_DEBUG("prune_gripper_opening value: %.2f", prune_gripper_opening_);
     priv_nh_.param<double>("prune_table_clearance", prune_table_clearance_, 0.0);
+    ROS_DEBUG("prune_table_clearance value: %.2f", prune_table_clearance_);
   }
 
   ~ObjectsDatabaseNode()
   {
     delete database_;
+    delete grasp_planning_server_;
   }
 };
 

@@ -63,6 +63,8 @@
 #include "household_objects_database/database_vfh_orientation.h"
 #include "household_objects_database/database_file_path.h"
 #include "household_objects_database/database_task.h"
+#include "household_objects_database/database_capture_region.h"
+#include "household_objects_database/database_object_paths.h"
 
 namespace household_objects_database
 {
@@ -128,7 +130,8 @@ namespace household_objects_database
     }
 
     virtual bool
-    getScaledModelsBySet (std::vector<boost::shared_ptr<DatabaseScaledModel> > &models, std::string model_set_name) const
+    getScaledModelsBySet (std::vector<boost::shared_ptr<DatabaseScaledModel> > &models, 
+                          std::string model_set_name) const
     {
       if (model_set_name.empty ())
         return getScaledModelsList (models);
@@ -146,6 +149,18 @@ namespace household_objects_database
       return countList (&example, num_models, "");
     }
 
+    bool
+    getScaledModelsByRecognitionId(std::vector<boost::shared_ptr<DatabaseScaledModel> > &models, 
+                                   std::string recognition_id) const
+    {
+      std::string where_clause = 
+        std::string("original_model_id IN (SELECT original_model_id FROM "
+                    "original_model WHERE original_model_recognition_id = '")
+        + recognition_id + std::string("')");
+      DatabaseScaledModel example;
+      return getList<DatabaseScaledModel> (models, example, where_clause);
+    }
+
     //! Returns the path that geometry paths are relative to
     bool
     getModelRoot (std::string& root) const
@@ -155,7 +170,8 @@ namespace household_objects_database
 
     //! Gets a list of all models with the requested tags in the database
     bool
-    getModelsListByTags (std::vector<boost::shared_ptr<DatabaseOriginalModel> > &models, std::vector<std::string> tags) const
+    getModelsListByTags (std::vector<boost::shared_ptr<DatabaseOriginalModel> > &models, 
+                         std::vector<std::string> tags) const
     {
       DatabaseOriginalModel example;
       std::string where_clause ("(");
@@ -177,6 +193,7 @@ namespace household_objects_database
       std::stringstream id;
       id << scaled_model_id;
       std::string where_clause ("scaled_model_id=" + id.str () + " AND hand_name='" + hand_name + "'");
+      //+ " AND grasp_energy >= 0 AND grasp_energy < 10" );
       return getList<DatabaseGrasp> (grasps, example, where_clause);
     }
 
@@ -367,7 +384,8 @@ namespace household_objects_database
     }
 
     bool
-    getVFHFromView (boost::shared_ptr<DatabaseVFH> & vfh, boost::shared_ptr<household_objects_database::DatabaseView> &view)
+    getVFHFromView (boost::shared_ptr<DatabaseVFH> & vfh, 
+                    boost::shared_ptr<household_objects_database::DatabaseView> &view)
     {
       std::vector<boost::shared_ptr<DatabaseVFH> > vfhs;
       std::stringstream where;
@@ -506,6 +524,29 @@ namespace household_objects_database
 
       return true;
     }
+
+    //! Gets the list of all capture regions for an object and hand pair.
+    bool
+    getCaptureRegions (int scaled_model_id, std::string robot_geometry_hash, std::vector<boost::shared_ptr<DatabaseCaptureRegion> > &capture_regions) const
+    {
+      DatabaseCaptureRegion example;
+      std::stringstream id;
+      id << scaled_model_id;
+      std::string where_clause ("scaled_model_id=" + id.str () + " AND robot_geometry_hash='" + robot_geometry_hash + "'" );
+      return getList<DatabaseCaptureRegion> (capture_regions, example, where_clause);
+    }
+
+    //! Gets the list of all object paths for an object and hand pair.
+    bool
+    getObjectPaths (int scaled_model_id, std::string robot_geometry_hash, std::vector<boost::shared_ptr<DatabaseObjectPaths> > &object_paths) const
+    {
+      DatabaseObjectPaths example;
+      std::stringstream id;
+      id << scaled_model_id;
+      std::string where_clause ("object_db_id=" + id.str () + " AND robot_geometry_hash='" + robot_geometry_hash + "'" );
+      return getList<DatabaseObjectPaths> (object_paths, example, where_clause);
+    }
+
 
   };
   typedef boost::shared_ptr<ObjectsDatabase> ObjectsDatabasePtr;
