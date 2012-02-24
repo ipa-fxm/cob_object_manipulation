@@ -13,6 +13,7 @@
 
   <depend package="rospy"/>
   <depend package="tf"/>
+  <depend package="actionlib"/>
   <depend package="geometry_msgs"/>
   <depend package="visualization_msgs"/>
   <depend package="interpolated_ik_motion_planner"/>

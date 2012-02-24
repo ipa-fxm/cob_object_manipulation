@@ -39,8 +39,9 @@
 import roslib
 roslib.load_manifest('pr2_gripper_grasp_planner_cluster')
 import rospy
+import actionlib
 from object_manipulation_msgs.srv import GraspPlanning, GraspPlanningResponse
-from object_manipulation_msgs.msg import Grasp
+from object_manipulation_msgs.msg import Grasp, GraspPlanningAction, GraspPlanningErrorCode, GraspPlanningResult
 from pr2_gripper_grasp_planner_cluster.srv import SetPointClusterGraspParams, SetPointClusterGraspParamsResponse
 import pr2_gripper_grasp_planner_cluster.point_cluster_grasp_planner as grasp_planner_cluster
 from sensor_msgs.msg import JointState
@@ -56,8 +57,10 @@ class PointClusterGraspPlannerServer:
         
         self.pcgp = grasp_planner_cluster.PointClusterGraspPlanner()
 
-        #advertise service for planning grasps
+        #advertise service and action for planning grasps
         rospy.Service('plan_point_cluster_grasp', GraspPlanning, self.plan_point_cluster_grasp_callback)
+        self._as = actionlib.SimpleActionServer('plan_point_cluster_grasp', GraspPlanningAction, 
+                                                execute_cb = self.plan_point_cluster_grasp_execute_cb)
 
         #advertise service for evaluating grasps
         rospy.Service('evaluate_point_cluster_grasps', GraspPlanning, self.evaluate_point_cluster_grasps_callback) 
@@ -69,6 +72,11 @@ class PointClusterGraspPlannerServer:
         self.randomize_grasps = rospy.get_param("~randomize_grasps", 0)
         rospy.loginfo("randomize_grasps:"+str(self.randomize_grasps))
         random.seed()
+
+        #start the action server
+        self._as.start()
+        
+        rospy.loginfo("point cluster grasp planner service/action is ready")
 
 
     ##service callback for changing params
@@ -125,10 +133,29 @@ class PointClusterGraspPlannerServer:
         return js
 
 
+    ##action callback for the plan_point_cluster_grasp action
+    def plan_point_cluster_grasp_execute_cb(self, goal):
+        rospy.loginfo("planning grasps for a point cluster")
+        result = GraspPlanningResult()
+        (grasps, error_code) = self.plan_point_cluster_grasps(goal.target, goal.arm_name)
+        result.grasps = grasps
+        result.error_code = error_code
+        self._as.set_succeeded(result)
+
+
     ##service callback for the plan_point_cluster_grasp service
     def plan_point_cluster_grasp_callback(self, req):
         rospy.loginfo("planning grasps for a point cluster")
         resp = GraspPlanningResponse()        
+        (grasps, error_code) = self.plan_point_cluster_grasps(req.target, req.arm_name)
+        resp.grasps = grasps
+        resp.error_code = error_code
+        return resp
+
+
+    def plan_point_cluster_grasps(self, target, arm_name):
+        error_code = GraspPlanningErrorCode()
+        grasps = []
 
         #get the hand joint names from the param server (loaded from yaml config file)
         joint_names_dict = rospy.get_param('~joint_names')
@@ -136,16 +163,14 @@ class PointClusterGraspPlannerServer:
         grasp_joint_angles_dict = rospy.get_param('~grasp_joint_angles')
         pregrasp_joint_efforts_dict = rospy.get_param('~pregrasp_joint_efforts')
         grasp_joint_efforts_dict = rospy.get_param('~grasp_joint_efforts')
-        if req.arm_name:
-            arm_name = req.arm_name
-        else:
+        if not arm_name:
             arm_name = joint_names_dict.keys()[0]
             rospy.logerr("point cluster grasp planner: missing arm_name in request!  Using "+arm_name)
         try:
             hand_joints = joint_names_dict[arm_name]
         except KeyError:
             arm_name = joint_names_dict.keys()[0]
-            rospy.logerr("arm_name "+req.arm_name+" not found!  Using joint names from "+arm_name)
+            rospy.logerr("arm_name "+arm_name+" not found!  Using joint names from "+arm_name)
             hand_joints = joint_names_dict[arm_name]
         pregrasp_joint_angles = pregrasp_joint_angles_dict[arm_name]
         grasp_joint_angles = grasp_joint_angles_dict[arm_name]
@@ -157,16 +182,16 @@ class PointClusterGraspPlannerServer:
 
         #find the cluster bounding box and relevant frames, and transform the cluster
         init_start_time = time.time()
-        if len(req.target.cluster.points) > 0:
-            self.pcgp.init_cluster_grasper(req.target.cluster)
-            cluster_frame = req.target.cluster.header.frame_id
+        if len(target.cluster.points) > 0:
+            self.pcgp.init_cluster_grasper(target.cluster)
+            cluster_frame = target.cluster.header.frame_id
         else:
-            self.pcgp.init_cluster_grasper(req.target.region.cloud)
-            cluster_frame = req.target.region.cloud.header.frame_id
+            self.pcgp.init_cluster_grasper(target.region.cloud)
+            cluster_frame = target.region.cloud.header.frame_id
             if len(cluster_frame) == 0:
                 rospy.logerr("region.cloud.header.frame_id was empty!")
-                resp.error_code.value = resp.error_code.OTHER_ERROR
-                return resp
+                error_code.value = error_code.OTHER_ERROR
+                return (grasps, error_code)
         init_end_time = time.time()
         #print "init time: %.3f"%(init_end_time - init_start_time)
 
@@ -177,11 +202,11 @@ class PointClusterGraspPlannerServer:
         #print "total grasp planning time: %.3f"%(grasp_plan_end_time - grasp_plan_start_time)
 
         #add error code to service
-        resp.error_code.value = resp.error_code.SUCCESS
+        error_code.value = error_code.SUCCESS
         grasp_list = []
         if pregrasp_poses == None:
-            resp.error_code.value = resp.error_code.OTHER_ERROR
-            return resp
+            error_code.value = error_code.OTHER_ERROR
+            return (grasps, error_code)
 
         #fill in the list of grasps
         for (grasp_pose, quality, pregrasp_dist) in zip(grasp_poses, qualities, pregrasp_dists):
@@ -190,12 +215,12 @@ class PointClusterGraspPlannerServer:
 
             #if the cluster isn't in the same frame as the graspable object reference frame,
             #transform the grasps to be in the reference frame
-            if cluster_frame == req.target.reference_frame_id:
+            if cluster_frame == target.reference_frame_id:
                 transformed_grasp_pose = grasp_pose
             else:
                 transformed_grasp_pose = change_pose_stamped_frame(self.pcgp.tf_listener, 
                                          stamp_pose(grasp_pose, cluster_frame), 
-                                         req.target.reference_frame_id).pose
+                                         target.reference_frame_id).pose
             if self.pcgp.pregrasp_just_outside_box:
                 min_approach_distance = pregrasp_dist
             else:
@@ -209,11 +234,11 @@ class PointClusterGraspPlannerServer:
             first_grasps = grasp_list[:30]
             random.shuffle(first_grasps)
             shuffled_grasp_list = first_grasps + grasp_list[30:]
-            resp.grasps = shuffled_grasp_list
+            grasps = shuffled_grasp_list
         else:
-            resp.grasps = grasp_list
+            grasps = grasp_list
 
-        return resp
+        return (grasps, error_code)
 
 
 if __name__ == '__main__':

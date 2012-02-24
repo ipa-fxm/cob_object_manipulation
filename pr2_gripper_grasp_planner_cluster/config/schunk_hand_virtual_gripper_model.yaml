@@ -37,7 +37,7 @@ grasp_joint_efforts:
 #sdh_palm_link has x towards the two fingers (model y), z out of the palm (model x), y to the side (model z)
 actual_wrist_frame_in_model_frame: [[0.0,1.0,0.0,0.0],[0.0,0.0,1.0,0.0],[1.0,0.0,0.0,0.0],[0.0,0.0,0.0,1.0]]
 
-default_pregrasp_dist: 0.15
+default_pregrasp_dist: 0.22
 min_good_grasp_points: 15
 wrist_to_fingertip_dist: 0.195
 wrist_to_palm_dist: 0.151

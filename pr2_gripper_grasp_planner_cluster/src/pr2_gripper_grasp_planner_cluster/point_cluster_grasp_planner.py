@@ -96,6 +96,8 @@ class PointClusterGraspPlanner:
         self.collision_point_id_start = 5000
         self.gripper_box_id_start = 1
 
+        #average number of points per sq. cm of bounding box surface
+        self._points_per_sq_cm = 5.
 
         #params for the gripper model/grasp search
 
@@ -109,6 +111,7 @@ class PointClusterGraspPlanner:
         actual_wrist_frame_in_model_frame = rospy.get_param("~actual_wrist_frame_in_model_frame", None)
         if actual_wrist_frame_in_model_frame == None:
             self.actual_wrist_frame_in_model_frame = scipy.identity(4)
+            rospy.logerr("no actual_wrist_frame_in_model_frame!  Using identity!")
         else:
             self.actual_wrist_frame_in_model_frame = scipy.matrix(actual_wrist_frame_in_model_frame).transpose()
         self.model_frame_in_actual_wrist_frame = self.actual_wrist_frame_in_model_frame**-1
@@ -420,7 +423,12 @@ class PointClusterGraspPlanner:
 	#find the angle difference between the newly-aligned rotation and the original pose
 	rel_mat = aligned_pose**-1 * pose
 	rel_quat = tf.transformations.quaternion_from_matrix(rel_mat)
-	angle = 2*math.acos(rel_quat[3])
+        if rel_quat[3] > 1.0:
+            angle = 0
+        elif rel_quat[3] < -1.0:
+            angle = math.pi
+	else:
+            angle = 2*math.acos(rel_quat[3])
 
         #return 1 if the pose is exactly orthogonal (angle 0), 0 if the pose is more than pi/6 away
         orthogonality = max(0, 1 - angle / (math.pi/6))
@@ -508,8 +516,11 @@ class PointClusterGraspPlanner:
         if self._output_features:
             self._outfile.write(str(feature_vector)+'\n')
 
+        #adjust the point_count weight depending on the density of points
+        point_count_weight = 5./self._points_per_sq_cm
+
         #hand chosen weights for now (collisions set to be unacceptable)
-        weights = [1., -10./0.01, -10./0.01, 10., 50., 50., 50., -10./0.01, -1000]  
+        weights = [point_count_weight, -10./0.01, -10./0.01, 10., 50., 50., 50., -10./0.01, -1000]  
         quality = sum([w*f for (w,f) in zip(weights, feature_vector)])
 
         prob = self.quality_to_probability(quality)
@@ -736,6 +747,14 @@ class PointClusterGraspPlanner:
         #rospy.loginfo("bounding box dims: "+pplist(self.object_bounding_box_dims))
         #rospy.loginfo("self._box_fits_in_hand: "+str(self._box_fits_in_hand))
 
+        #compute the average number of points per sq cm of bounding box surface (half the surface only)
+        bounding_box_surf = (self.object_bounding_box_dims[0]*100 * self.object_bounding_box_dims[1]*100) + \
+            (self.object_bounding_box_dims[0]*100 * self.object_bounding_box_dims[2]*100) + \
+            (self.object_bounding_box_dims[1]*100 * self.object_bounding_box_dims[2]*100)
+        self._points_per_sq_cm = self.object_points.shape[1] / bounding_box_surf
+        #rospy.loginfo("bounding_box_surf: %.2f, number of points: %d"%(bounding_box_surf, self.object_points.shape[1]))
+        #rospy.loginfo("points per sq cm: %.4f"%self._points_per_sq_cm)
+
 
     ##evaluate grasps on the point cluster
     def evaluate_point_cluster_grasps(self, grasps, frame):
@@ -768,6 +787,7 @@ class PointClusterGraspPlanner:
         found_grasps1 = []
         found_grasps2 = []
         num_overhead_grasps = 0
+        num_overhead_grasps1 = 0
 
         #start the wrist out so that the palm is at the edge of the bounding box
         top_wrist_z_pos_palm = self.object_bounding_box[1][2] + self._wrist_to_palm_dist
@@ -948,8 +968,8 @@ class PointClusterGraspPlanner:
         #generate the pregrasps and pose messages
         for (grasp_mat, quality, palm_dist_moved) in found_grasps:
             
-            #transform the grasp_mat so that it reflects the actual desired wrist frame 
-            grasp_mat = grasp_mat * self.actual_wrist_frame_in_model_frame
+            ##transform the grasp_mat so that it reflects the actual desired wrist frame 
+            #grasp_mat = grasp_mat * self.actual_wrist_frame_in_model_frame
 
             #pregrasp is just the grasp pose, backed up by self.pregrasp_dist (m)
             #or palm_dist_moved, if we want the pregrasp to be just outside the bounding box
@@ -961,6 +981,10 @@ class PointClusterGraspPlanner:
                 back_up_mat[0,3] = -palm_dist_moved-.005
                 pregrasp_dists.append(palm_dist_moved+.005)
             pregrasp_mat = grasp_mat * back_up_mat
+
+            #transform the grasp_mat so that it reflects the actual desired wrist frame 
+            grasp_mat = grasp_mat * self.actual_wrist_frame_in_model_frame
+            pregrasp_mat = pregrasp_mat * self.actual_wrist_frame_in_model_frame
 
             #convert to Pose messages in the same frame as the original cluster
             pregrasp_pose = mat_to_pose(pregrasp_mat, self.object_to_cluster_frame)
