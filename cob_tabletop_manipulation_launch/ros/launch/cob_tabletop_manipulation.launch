@@ -11,12 +11,11 @@
 	-->
 
 	<!-- alternative option: database server running on a local machine -->
-        <param name="/household_objects_database/database_host" value="cob3-3-pc2"/>
-        <param name="/household_objects_database/database_port" value="5432"/>
-        <param name="/household_objects_database/database_user" value="ipa"/>
-        <param name="/household_objects_database/database_pass" value="ipa"/>
-        <param name="/household_objects_database/database_name" value="household_objects-0.5"/>
-
+	<param name="/household_objects_database/database_host" value="cob3-3-pc2"/>
+	<param name="/household_objects_database/database_port" value="5432"/>
+	<param name="/household_objects_database/database_user" value="ipa"/>
+	<param name="/household_objects_database/database_pass" value="ipa"/>
+	<param name="/household_objects_database/database_name" value="household_objects-0.5"/>
 	<node pkg="household_objects_database" name="objects_database_node" type="objects_database_node" respawn="true" output="screen"/>
 
 	<!-- manipulation prerequisites all includede in the cob3_3_arm_navigation pkg -->
